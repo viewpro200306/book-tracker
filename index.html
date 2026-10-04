@@ -204,7 +204,10 @@ async function toggleCam() {
 }
 function onScan(text) {
   const c = text.replace(/\D/g, ''), now = Date.now();
-  if (!check13(c)) return;
+  if (!check13(c)) {
+    if (/^\d{13}$/.test(c) && now - (onScan.w || 0) > 2500) { onScan.w = now; toast('這是 ' + c.slice(0, 3) + ' 開頭的商品條碼，不是 ISBN，請掃 978 開頭那組'); }
+    return;
+  }
   if (c === last.c && now - last.t < 3000) return;
   last = { c, t: now };
   addIsbn(c);
