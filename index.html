@@ -36,6 +36,7 @@ input{width:100%;padding:9px;border:1px solid #d1d5db;border-radius:6px;font-siz
   <div class="shelf"><label>授權者</label><select id="orSel" onchange="setCtx('or',this.value)"></select><button class="g" onclick="newCtx('or')">＋新增</button></div>
   <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
   <div id="reader"></div>
+  <div id="scanInfo" class="stat"></div>
   <div class="add">
     <input id="isbnIn" type="text" inputmode="numeric" placeholder="手動輸入 ISBN（數字鍵盤）">
     <button onclick="manualAdd()">加入</button>
@@ -195,8 +196,14 @@ async function toggleCam() {
   rd.style.display = 'block';
   scanner = new Html5Qrcode('reader', { formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13], useBarCodeDetectorIfSupported: true });
   try {
-    await scanner.start({ facingMode: 'environment' }, { fps: 15, qrbox: { width: 280, height: 120 } }, onScan);
+    const base = { fps: 15, qrbox: (w, h) => ({ width: Math.floor(w * 0.92), height: Math.floor(Math.min(w, h) * 0.45) }) };
+    try {
+      await scanner.start({ facingMode: 'environment' }, Object.assign({ videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } }, base), onScan);
+    } catch (e1) {
+      await scanner.start({ facingMode: 'environment' }, base, onScan);
+    }
     scanning = true; btn.textContent = '⏹ 停止掃描'; btn.className = 'red';
+    document.getElementById('scanInfo').textContent = '相機運作中，尚未讀到條碼（距離約 15–25 公分，對準 978 開頭那組）';
   } catch (e) {
     rd.style.display = 'none';
     alert('無法開啟相機。請確認網頁是以 https 開啟並已允許相機權限。\n' + e);
@@ -204,6 +211,7 @@ async function toggleCam() {
 }
 function onScan(text) {
   const c = text.replace(/\D/g, ''), now = Date.now();
+  document.getElementById('scanInfo').textContent = '讀到：' + c + (check13(c) ? ' ✓ 是 ISBN' : ' ✗ 不是 ISBN');
   if (!check13(c)) {
     if (/^\d{13}$/.test(c) && now - (onScan.w || 0) > 2500) { onScan.w = now; toast('這是 ' + c.slice(0, 3) + ' 開頭的商品條碼，不是 ISBN，請掃 978 開頭那組'); }
     return;
