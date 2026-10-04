@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>索書快速記錄</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans TC",sans-serif}
+body{background:#f4f6f9;margin:0;padding:10px;color:#222}
+.wrap{max-width:760px;margin:0 auto;background:#fff;border-radius:12px;padding:14px}
+h1{font-size:1.15rem;text-align:center;margin:0 0 12px}
+.row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+button{flex:1;padding:11px 10px;border:0;border-radius:8px;font-weight:600;font-size:.9rem;color:#fff;background:#3b82f6}
+button.g{background:#6b7280}button.ok{background:#10b981}button.red{background:#ef4444}
+input{width:100%;padding:9px;border:1px solid #d1d5db;border-radius:6px;font-size:1rem}
+#reader{width:100%;display:none;margin-bottom:10px;border-radius:8px;overflow:hidden}
+.add{display:flex;gap:8px;margin-bottom:10px}.add button{flex:0 0 80px}
+.stat{font-size:.85rem;color:#555;margin:6px 0}
+.card{border:1px solid #e5e7eb;border-radius:8px;padding:9px;margin-bottom:8px}
+.card.miss{border-color:#ef4444;background:#fef2f2}.card.pending{border-color:#f59e0b;background:#fffbeb}
+.top{display:flex;justify-content:space-between;align-items:center;font-size:.8rem;color:#666;margin-bottom:6px}
+.badge{font-weight:700}.b-ok{color:#059669}.b-miss{color:#dc2626}.b-pending{color:#d97706}
+.card input{margin-bottom:5px}
+.del{flex:0 0 auto;padding:3px 9px;font-size:.75rem;background:#ef4444}
+.shelf{display:flex;gap:8px;margin-bottom:10px}.shelf select{flex:1;padding:10px;font-size:1rem;border:1px solid #d1d5db;border-radius:6px}.shelf button{flex:0 0 70px}.shelf label{flex:0 0 66px;align-self:center;font-size:.85rem;font-weight:600}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:9px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:9}
+@media print{.np{display:none!important}body{background:#fff;padding:0}.wrap{padding:0}.card input{border:0;padding:2px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>📖 索書快速記錄</h1>
+<div class="np">
+  <div class="shelf"><label>被授權者</label><select id="eeSel" onchange="setCtx('ee',this.value)"></select><button class="g" onclick="newCtx('ee')">＋新增</button></div>
+  <div class="shelf"><label>授權者</label><select id="orSel" onchange="setCtx('or',this.value)"></select><button class="g" onclick="newCtx('or')">＋新增</button></div>
+  <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
+  <div id="reader"></div>
+  <div class="add">
+    <input id="isbnIn" type="text" inputmode="numeric" placeholder="手動輸入 ISBN（數字鍵盤）">
+    <button onclick="manualAdd()">加入</button>
+  </div>
+  <div class="row">
+    <button class="g" onclick="relookup()">🔄 補查未完成</button>
+    <button class="g" onclick="exportOr()">📤 給授權者 CSV</button>
+    <button class="g" onclick="exportEe()">📤 給被授權者 CSV</button>
+    <button class="g" onclick="copyOr()">📋 複製給授權者的文字</button>
+    <button class="g" onclick="exportAll()">全部 CSV</button>
+    <button class="g" onclick="window.print()">列印/PDF</button>
+  </div>
+  <div class="row">
+    <button class="g" onclick="exportJSON()">備份 JSON</button>
+    <button class="g" onclick="document.getElementById('imp').click()">匯入（合併）</button>
+    <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(event)">
+  </div>
+</div>
+<div class="stat" id="stat"></div>
+<div id="list"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const KEY = 'copyright_books_v2';
+const DC = 'http://purl.org/dc/elements/1.1/';
+let books = load(), scanner = null, scanning = false, last = { c: '', t: 0 };
+
+function load() {
+  try {
+    const v2 = localStorage.getItem(KEY);
+    if (v2) return JSON.parse(v2);
+    const old = JSON.parse(localStorage.getItem('copyright_books') || '[]');
+    return old.map(o => ({
+      id: o.id, isbn: (o.isbn || '').replace(/\D/g, ''), title: o.title || '',
+      publisher: o.publisher === '未提供' ? '' : (o.publisher || ''),
+      author: o.author === '未提供' ? '' : (o.author || ''),
+      note: o.note || '', st: o.title ? 'ok' : 'miss', ts: o.id
+    }));
+  } catch (e) { return []; }
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(books)); } catch (e) {} }
+const U = '未指定';
+let ctx = (() => { try { return JSON.parse(localStorage.getItem('ctx_v1')) || {}; } catch (e) { return {}; } })();
+let lists = (() => { try { return JSON.parse(localStorage.getItem('lists_v1')) || { ee: [], or: [] }; } catch (e) { return { ee: [], or: [] }; } })();
+ctx.ee = ctx.ee || U; ctx.or = ctx.or || U;
+const eeOf = b => b.lee || b.shelf || U, orOf = b => b.lor || U;
+const inCtx = b => eeOf(b) === ctx.ee && orOf(b) === ctx.or;
+function opts(k) { return [...new Set([U, ...(lists[k] || []), ...books.map(k === 'ee' ? eeOf : orOf)])]; }
+function saveCtx() { try { localStorage.setItem('ctx_v1', JSON.stringify(ctx)); localStorage.setItem('lists_v1', JSON.stringify(lists)); } catch (e) {} }
+function setCtx(k, v) { ctx[k] = v; saveCtx(); render(); }
+function newCtx(k) {
+  const n = (prompt(k === 'ee' ? '新增被授權者（公司名）' : '新增授權者（公司名）') || '').trim();
+  if (!n) return;
+  if (!lists[k].includes(n)) lists[k].push(n);
+  ctx[k] = n; saveCtx(); render();
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function toast(m) {
+  const t = document.getElementById('toast'); t.textContent = m; t.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 1800);
+}
+
+/* ISBN 驗證：只接受 978/979 開頭的 13 碼（日本書的第二組 192 價格條碼會被忽略） */
+function check13(s) {
+  if (!/^97[89]\d{10}$/.test(s)) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += (+s[i]) * (i % 2 ? 3 : 1);
+  return (10 - sum % 10) % 10 === +s[12];
+}
+function normIsbn(raw) {
+  const s = String(raw).replace(/[^0-9Xx]/g, '').toUpperCase();
+  if (s.length === 10) {
+    const b = '978' + s.slice(0, 9); let sum = 0;
+    for (let i = 0; i < 12; i++) sum += (+b[i]) * (i % 2 ? 3 : 1);
+    return b + ((10 - sum % 10) % 10);
+  }
+  return s;
+}
+
+/* 書目來源：日文書優先 NDL，其次 Google Books、Open Library */
+const SOURCES = [
+  { name: 'NDL', async get(isbn, sig) {
+    const r = await fetch('https://ndlsearch.ndl.go.jp/api/opensearch?isbn=' + isbn, { signal: sig });
+    if (!r.ok) throw new Error('http');
+    const x = new DOMParser().parseFromString(await r.text(), 'text/xml');
+    const it = x.getElementsByTagName('item')[0];
+    if (!it) return null;
+    const g = (ns, n) => { const e = it.getElementsByTagNameNS(ns, n)[0]; return e ? e.textContent.trim() : ''; };
+    const title = g(DC, 'title') || (it.getElementsByTagName('title')[0] || {}).textContent || '';
+    const au = it.getElementsByTagName('author')[0];
+    return { title: title.trim(), publisher: g(DC, 'publisher'), author: au ? au.textContent.trim() : g(DC, 'creator'), date: g(DC, 'date') };
+  } },
+  { name: 'Google', async get(isbn, sig) {
+    const r = await fetch('https://www.googleapis.com/books/v1/volumes?q=isbn:' + isbn, { signal: sig });
+    if (!r.ok) throw new Error('http');
+    const d = await r.json();
+    if (!d.items || !d.items.length) return null;
+    const v = d.items[0].volumeInfo;
+    return { title: v.title || '', publisher: v.publisher || '', author: (v.authors || []).join('、'), date: v.publishedDate || '' };
+  } },
+  { name: 'OpenLibrary', async get(isbn, sig) {
+    const r = await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:' + isbn + '&format=json&jscmd=data', { signal: sig });
+    if (!r.ok) throw new Error('http');
+    const d = (await r.json())['ISBN:' + isbn];
+    if (!d) return null;
+    return { title: d.title || '', publisher: ((d.publishers || [])[0] || {}).name || '', author: (d.authors || []).map(a => a.name).join('、'), date: d.publish_date || '' };
+  } }
+];
+
+async function lookup(b) {
+  let failed = false;
+  for (const s of SOURCES) {
+    const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 8000);
+    try {
+      const r = await s.get(b.isbn, ac.signal);
+      if (r && r.title) {
+        if (!b.title) b.title = r.title;
+        if (!b.publisher) b.publisher = r.publisher;
+        if (!b.author) b.author = r.author;
+        if (!b.date) b.date = r.date || '';
+        b.st = 'ok'; b.src = s.name; clearTimeout(tm); save(); render(); return;
+      }
+    } catch (e) { failed = true; }
+    clearTimeout(tm);
+  }
+  b.st = failed ? 'pending' : 'miss';
+  save(); render();
+}
+
+function addIsbn(raw) {
+  if (ctx.ee === U || ctx.or === U) { toast('請先選擇被授權者與授權者'); return false; }
+  const isbn = normIsbn(raw);
+  if (!check13(isbn)) { toast('不是有效的 ISBN'); return false; }
+  if (books.some(b => b.isbn === isbn && inCtx(b))) { toast('已在清單中'); return false; }
+  const b = { id: Date.now() + Math.random(), isbn, title: '', publisher: '', author: '', note: '', st: 'pending', ts: Date.now(), lee: ctx.ee, lor: ctx.or, got: false, date: '' };
+  books.unshift(b); save(); render();
+  if (navigator.vibrate) navigator.vibrate(80);
+  toast('已加入 ' + isbn);
+  lookup(b);
+  return true;
+}
+function manualAdd() {
+  const i = document.getElementById('isbnIn');
+  if (addIsbn(i.value)) i.value = '';
+}
+document.getElementById('isbnIn').addEventListener('keydown', e => { if (e.key === 'Enter') manualAdd(); });
+
+/* 連續掃描：相機保持開啟，掃到有效 ISBN 就存，不跳視窗 */
+async function toggleCam() {
+  const rd = document.getElementById('reader'), btn = document.getElementById('camBtn');
+  if (scanning) {
+    try { await scanner.stop(); scanner.clear(); } catch (e) {}
+    rd.style.display = 'none'; btn.textContent = '📷 開始連續掃描'; btn.className = 'ok'; scanning = false; return;
+  }
+  if (ctx.ee === U || ctx.or === U) { alert('請先選擇「被授權者」與「授權者」，再開始掃描'); return; }
+  rd.style.display = 'block';
+  scanner = new Html5Qrcode('reader', { formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13], useBarCodeDetectorIfSupported: true });
+  try {
+    await scanner.start({ facingMode: 'environment' }, { fps: 15, qrbox: { width: 280, height: 120 } }, onScan);
+    scanning = true; btn.textContent = '⏹ 停止掃描'; btn.className = 'red';
+  } catch (e) {
+    rd.style.display = 'none';
+    alert('無法開啟相機。請確認網頁是以 https 開啟並已允許相機權限。\n' + e);
+  }
+}
+function onScan(text) {
+  const c = text.replace(/\D/g, ''), now = Date.now();
+  if (!check13(c)) return;
+  if (c === last.c && now - last.t < 3000) return;
+  last = { c, t: now };
+  addIsbn(c);
+}
+
+function relookup() {
+  const todo = books.filter(b => b.st !== 'ok');
+  if (!todo.length) return toast('沒有需要補查的書');
+  toast('補查 ' + todo.length + ' 本…');
+  todo.forEach(b => { b.st = 'pending'; lookup(b); });
+}
+
+function upd(id, f, v) { const b = books.find(x => x.id === id); if (b) { b[f] = v; if ((f === 'title') && v) b.st = 'ok'; save(); renderStat(); } }
+function del(id) { if (confirm('刪除這筆？')) { books = books.filter(b => b.id !== id); save(); render(); } }
+
+function renderStat() {
+  const L = books.filter(inCtx), miss = L.filter(b => !b.title).length, nog = L.filter(b => !b.got).length;
+  document.getElementById('stat').textContent = ctx.ee + ' × ' + ctx.or + '：共 ' + L.length + ' 本，缺書名 ' + miss + '，未收檔 ' + nog;
+}
+function render() {
+  renderStat();
+  const L = { ok: '✓ 已取得', miss: '✗ 查無資料，請手動補', pending: '… 查詢中/待補查' };
+  ['ee', 'or'].forEach(k => { document.getElementById(k + 'Sel').innerHTML = opts(k).map(x => '<option' + (x === ctx[k] ? ' selected' : '') + '>' + esc(x) + '</option>').join(''); });
+  document.getElementById('list').innerHTML = books.filter(inCtx).map(b => {
+    const cls = b.title ? 'ok' : (b.st === 'miss' ? 'miss' : 'pending');
+    const lab = b.title ? L.ok : L[b.st === 'miss' ? 'miss' : 'pending'];
+    return '<div class="card ' + (b.title ? '' : cls) + '"><div class="top"><span>' + esc(b.isbn) +
+      ' <span class="badge b-' + cls + '">' + lab + '</span></span><label class="np" style="font-size:.8rem;margin-left:auto;margin-right:8px"><input type="checkbox" style="width:auto" ' + (b.got ? 'checked ' : '') + 'onchange="upd(' + b.id + ',\'got\',this.checked)"> 已收檔</label><button class="del np" onclick="del(' + b.id + ')">刪除</button></div>' +
+      '<input placeholder="書名" value="' + esc(b.title) + '" onchange="upd(' + b.id + ',\'title\',this.value.trim())">' +
+      '<input placeholder="出版社" value="' + esc(b.publisher) + '" onchange="upd(' + b.id + ',\'publisher\',this.value.trim())">' +
+      '<input placeholder="備註" value="' + esc(b.note) + '" onchange="upd(' + b.id + ',\'note\',this.value.trim())"></div>';
+  }).join('') || '<div class="stat">尚無紀錄，開始掃描吧</div>';
+}
+
+function dl(name, mime, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+function csvOut(L, name, withGot) {
+  if (!L.length) return toast('沒有資料');
+  const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+  const head = ['被授權者', '授權者', '序號', '書名', '出版社', '著者', 'ISBN', '出版日'].concat(withGot ? ['收檔'] : [], ['備註']);
+  const rows = [head.map(q).join(',')];
+  L.forEach((b, i) => rows.push([eeOf(b), orOf(b), i + 1, b.title, b.publisher, b.author, '="' + b.isbn + '"', b.date].concat(withGot ? [b.got ? '已收到' : '未收到'] : [], [b.note]).map(q).join(',')));
+  dl(name + '_' + new Date().toISOString().slice(0, 10) + '.csv', 'text/csv;charset=utf-8', '\ufeff' + rows.join('\r\n'));
+}
+const byTime = L => L.slice().sort((a, b) => a.ts - b.ts);
+function exportOr() { csvOut(byTime(books.filter(b => orOf(b) === ctx.or)), '評估申請_給' + ctx.or, false); }
+function exportEe() { csvOut(byTime(books.filter(b => eeOf(b) === ctx.ee)).sort((a, b) => orOf(a).localeCompare(orOf(b))), '申請一覽_' + ctx.ee, true); }
+function exportAll() { csvOut(byTime(books), '索書清單_全部', true); }
+function copyOr() {
+  const L = byTime(books.filter(b => orOf(b) === ctx.or));
+  if (!L.length) return toast('沒有資料');
+  const g = {}; L.forEach(b => (g[eeOf(b)] = g[eeOf(b)] || []).push(b));
+  const t = Object.keys(g).map(k => '【' + k + '】\n' + g[k].map((b, i) => (i + 1) + '. ' + (b.title || '(書名待補)') + '／' + (b.publisher || '') + '／' + b.isbn).join('\n')).join('\n\n');
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('已複製'), () => prompt('請手動複製', t));
+}
+function exportJSON() {
+  if (!books.length) return toast('沒有資料');
+  dl('索書備份_' + new Date().toISOString().slice(0, 10) + '.json', 'application/json', JSON.stringify(books, null, 2));
+}
+function importJSON(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      if (!Array.isArray(d)) throw 0;
+      let n = 0;
+      d.forEach(o => {
+        const isbn = String(o.isbn || '').replace(/\D/g, '');
+        if (isbn && !books.some(b => b.isbn === isbn && eeOf(b) === (o.lee || o.shelf || ctx.ee) && orOf(b) === (o.lor || ctx.or))) {
+          books.push({ id: Date.now() + Math.random(), isbn, title: o.title || '', publisher: o.publisher || '', author: o.author || '', note: o.note || '', st: o.title ? 'ok' : 'pending', ts: o.ts || Date.now(), lee: o.lee || o.shelf || ctx.ee, lor: o.lor || ctx.or, got: !!o.got, date: o.date || '' }); n++;
+        }
+      });
+      save(); render(); toast('匯入 ' + n + ' 筆（已存在的略過）');
+    } catch (e) { alert('檔案格式不正確'); }
+    ev.target.value = '';
+  };
+  r.readAsText(f);
+}
+
+window.addEventListener('online', () => { if (books.some(b => b.st === 'pending')) relookup(); });
+render();
+</script>
+</body>
+</html>
