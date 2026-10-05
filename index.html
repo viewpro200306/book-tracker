@@ -38,6 +38,8 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 .pk{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:.9rem}.pk input{width:auto;margin-top:4px}
 .err{color:#dc2626;font-size:.8rem;margin-top:4px}
 #ov .r{padding:7px 0;border-bottom:1px solid #e5e7eb;font-size:.85rem;line-height:1.5}#ov .tg{font-size:.72rem;background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:6px}
+#td .r{padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:.88rem;line-height:1.5}#td .tg{font-size:.72rem;padding:1px 6px;border-radius:6px}#td .cp{flex:0 0 auto;padding:6px 14px;font-size:.8rem}
+#nm .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:9px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:30}
 @media print{.np{display:none!important}body{background:#fff;padding:0}.wrap{padding:0}.card input{border:0;padding:2px}}
 </style>
@@ -49,6 +51,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <div class="shelf"><label>被授權者</label><select id="eeSel" onchange="setCtx('ee',this.value)"></select><button class="g" onclick="newCtx('ee')">＋新增</button></div>
   <div class="shelf"><label>授權者</label><select id="orSel" onchange="setCtx('or',this.value)"></select><button class="g" onclick="newCtx('or')">＋新增</button></div>
   <div class="shelf"><label>版代</label><select id="agSel" onchange="setAgent(this.value)"></select><button class="g" onclick="newAgent()">＋新增</button></div>
+  <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openNm()">✎ 修改或刪除名稱（被授權者／授權者／版代）</button>
   <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
   <div id="reader"></div>
   <video id="vid" playsinline muted autoplay style="display:none;width:100%;border-radius:8px;margin-bottom:10px;background:#000"></video>
@@ -62,7 +65,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
     <button class="g" onclick="openPk()">📥 從授權者已有的書挑選</button>
   </div>
   <div class="row">
-    <button class="g" onclick="relookup()">🔄 補查未完成</button>
+    <button class="g" id="todoBtn" onclick="openTodo()">⚠ 待處理 (0)</button>
     <button onclick="openOv()">📋 總覽（發信前確認）</button>
   </div>
   <details style="margin-bottom:10px"><summary style="padding:8px 2px;font-weight:600;color:#555">更多功能（匯出 CSV、複製文字、備份）</summary>
@@ -78,6 +81,9 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
     <button class="g" onclick="document.getElementById('imp').click()">匯入（合併）</button>
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(event)">
   </div>
+  <div class="row">
+    <button class="red" onclick="clearBooks()">🗑 清空書單（保留公司名單與版代設定）</button>
+  </div>
   </details>
 </div>
 <div class="stat" id="stat"></div>
@@ -86,6 +92,8 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 <div id="ov"></div>
 <div id="fm" class="ovl"></div>
 <div id="pk" class="ovl"></div>
+<div id="td" class="ovl"></div>
+<div id="nm" class="ovl"></div>
 <div id="toast"></div>
 <div id="last"></div>
 
@@ -194,12 +202,25 @@ const SOURCES = [
 ];
 
 const JP = { '591': 'ポプラ社', '569': 'PHP研究所', '334': '光文社', '575': '双葉社', '480': '筑摩書房', '478': 'ダイヤモンド社', '04': 'KADOKAWA', '06': '講談社', '08': '集英社', '09': '小学館', '10': '新潮社', '12': '中央公論新社', '16': '文藝春秋' };
+function fixCreators(b) {
+  if (!b.author || b.illus) return;
+  const parts = b.author.split(/[,，;；]/).map(x => x.trim()).filter(Boolean);
+  const au = [], il = [];
+  parts.forEach(x => {
+    let m;
+    if ((m = x.match(/^(.+?)\s*(挿絵|イラスト|絵|画)$/))) il.push(m[1].trim());
+    else if ((m = x.match(/^(.+?)\s*(原作|原著|作|著|文)$/))) au.push(m[1].trim());
+  });
+  const heads = parts.filter(x => !/^\d{3,4}-\d{0,4}$/.test(x)).join(' ');
+  if (au.length || il.length) { b.author = au.length ? au.join('、') : heads; b.illus = il.join('、'); }
+  else if (/\d{4}-/.test(b.author)) b.author = heads;
+}
 function jpGuess(isbn) {
   if (!isbn.startsWith('9784')) return '';
   const r = isbn.slice(4);
   return JP[r.slice(0, 3)] || JP[r.slice(0, 2)] || '';
 }
-const isRoman = s => !!s && !/[\u3040-\u30FF\u3400-\u9FFF]/.test(s);
+const isRoman = s => !!s && !/[\u3040-\u30FF\u3400-\u9FFF]/.test(s) && !Object.values(JP).some(v => v.toLowerCase() === s.replace(/\s/g, '').toLowerCase());
 
 async function lookup(b) {
   const res = await Promise.all(SOURCES.map(async s => {
@@ -214,11 +235,7 @@ async function lookup(b) {
     log.push(x.n + (x.e ? '連線失敗' : has ? '✓' : '無資料'));
     if (has) { ['title', 'publisher', 'author', 'date'].forEach(f => { if (!b[f] && x.r[f]) b[f] = x.r[f]; }); if (!b.src) b.src = x.n; }
   });
-  if (b.author && !b.illus && /[絵画]|イラスト/.test(b.author)) {
-    const ps = b.author.split(/[;；\/／]/).map(x => x.trim()).filter(Boolean);
-    const il = ps.filter(x => /[絵画]|イラスト/.test(x)), au = ps.filter(x => !/[絵画]|イラスト/.test(x));
-    if (il.length && au.length) { b.illus = il.map(x => x.replace(/\s*(挿絵|イラスト|絵|画)$/, '')).join('、'); b.author = au.map(x => x.replace(/\s*(原作|著|文|作)$/, '')).join('、'); }
-  }
+  fixCreators(b);
   const found = !!(b.title || b.author || b.publisher);
   const g = jpGuess(b.isbn);
   if (g && (!b.publisher || isRoman(b.publisher))) { b.publisher = g; b.guess = true; log.push('出版社依 ISBN 前綴推定'); }
@@ -249,7 +266,7 @@ function addIsbn(raw) {
   const b = { id: Date.now() + Math.random(), isbn, title: '', publisher: '', author: '', illus: '', date: '', note: '', st: 'pending', ts: Date.now(), lee: ctx.ee, lor: ctx.or, got: false };
   if (src) {
     ['title', 'publisher', 'author', 'illus', 'date', 'type'].forEach(f => { b[f] = src[f] || ''; });
-    b.guess = !!src.guess; b.st = 'ok'; b.dbg = '由「' + eeOf(src) + ' × ' + orOf(src) + '」的清單帶入';
+    b.guess = !!src.guess; b.pubOk = !!src.pubOk; b.st = 'ok'; b.dbg = '由「' + eeOf(src) + ' × ' + orOf(src) + '」的清單帶入';
   }
   lastId = b.id; books.unshift(b); save(); render(); lastMsg(b);
   if (navigator.vibrate) navigator.vibrate(80);
@@ -331,13 +348,120 @@ function onScan(text) {
   addIsbn(c);
 }
 
-function relookup() {
+async function relookup() {
   const todo = books.filter(b => !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title));
   if (!todo.length) return toast('沒有需要補查的書');
   toast('補查 ' + todo.length + ' 本…');
-  todo.forEach(b => { b.st = 'pending'; lookup(b); });
+  await Promise.all(todo.map(b => { b.st = 'pending'; return lookup(b); }));
+  toast('補查完成'); refreshOvl();
 }
 
+function clearBooks() {
+  if (!books.length) return toast('目前沒有書單');
+  if (!confirm('要清空全部 ' + books.length + ' 筆書單嗎？\n公司名單與各組合的版代設定會保留。\n請先確認已按「備份 JSON」存好。')) return;
+  if (!confirm('再確認一次：清空後無法復原，只能靠備份檔匯入還原。確定清空書單？')) return;
+  books = []; lastId = null; save(); document.getElementById('last').style.display = 'none'; render(); toast('已清空書單');
+}
+function clearAll() {
+  if (!confirm('要把書單、公司名單、版代設定全部清空嗎？\n請先確認已按「備份 JSON」存好。')) return;
+  if (!confirm('再確認一次：清空後無法復原。確定全部清空？')) return;
+  books = []; agents = {}; lists = { ee: [], or: [], ag: [] }; ctx.ee = U; ctx.or = U; lastId = null;
+  save(); saveCtx(); document.getElementById('last').style.display = 'none'; render(); toast('已全部清空');
+}
+function problems(b) {
+  const r = [];
+  if (!b.manual && b.st === 'pending') r.push('待補查（當時連不上網）');
+  if (b.st === 'miss') r.push('查無資料');
+  if (!b.title && !r.length) r.push('缺書名');
+  if (pubWarn(b)) r.push('出版社待確認');
+  return r;
+}
+function openTodo() { document.getElementById('td').style.display = 'block'; renderTodo(); }
+function closeTodo() { document.getElementById('td').style.display = 'none'; }
+function renderTodo() {
+  const L = byTime(books).filter(b => problems(b).length);
+  const re = books.filter(b => !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title)).length;
+  let h = ovlHead('⚠ 待處理（' + L.length + ' 本）', 'closeTodo') +
+    '<div class="stat">所有組合裡還需要處理的書都列在這裡。「前往」會跳到那本書的書卡，補好後這裡就會消失。</div>' +
+    '<button style="width:100%;margin:6px 0 10px"' + (re ? '' : ' disabled') + ' onclick="relookup()">🔄 重新連網查詢（' + re + ' 本）</button>';
+  if (!L.length) h += '<div class="stat">目前沒有需要處理的書</div>';
+  L.forEach(b => {
+    const ag = agentOf(eeOf(b), orOf(b));
+    h += '<div class="r"><b>' + esc(b.title || b.isbn || '(無資料)') + '</b><br><span class="s">' + esc(eeOf(b)) + ' × ' + esc(orOf(b)) + (ag ? '（經版代 ' + esc(ag) + '）' : '') + '</span><br>' +
+      problems(b).map(x => '<span class="tg" style="background:#fef3c7;color:#92400e">' + x + '</span>').join(' ') +
+      '<div style="display:flex;gap:8px;margin-top:6px"><button class="g cp" onclick="gotoBook(' + b.id + ')">前往</button><button class="red cp" onclick="del(' + b.id + ')">刪除</button></div></div>';
+  });
+  document.getElementById('td').innerHTML = h;
+}
+function gotoBook(id) {
+  const b = books.find(x => x.id === id); if (!b) return;
+  ctx.ee = eeOf(b); ctx.or = orOf(b); saveCtx(); lastId = b.id; closeTodo(); render();
+  const el = document.getElementById('c_' + id); if (el) el.scrollIntoView({ block: 'center' });
+}
+function nameUse(k, n) {
+  if (k === 'ag') return Object.keys(agents).filter(x => agents[x] === n).length;
+  return books.filter(b => (k === 'ee' ? eeOf(b) : orOf(b)) === n).length;
+}
+function allNames(k) {
+  const src = k === 'ag' ? Object.values(agents) : books.map(k === 'ee' ? eeOf : orOf);
+  return [...new Set([...(lists[k] || []), ...src])].filter(x => x && x !== U).sort();
+}
+function openNm() { document.getElementById('nm').style.display = 'block'; renderNm(); }
+function closeNm() { document.getElementById('nm').style.display = 'none'; render(); }
+function renderNm() {
+  const T = { ee: '被授權者', or: '授權者', ag: '版代' };
+  let h = ovlHead('✎ 修改或刪除名稱', 'closeNm') + '<div class="stat">改名會同步改掉所有書與設定；刪除前會告訴你會影響幾筆。</div>';
+  ['ee', 'or', 'ag'].forEach(k => {
+    h += '<h3 style="margin:14px 0 4px;font-size:1rem;background:#eef2ff;padding:6px 8px;border-radius:6px">' + T[k] + '</h3>';
+    const ns = allNames(k);
+    if (!ns.length) h += '<div class="stat">（沒有）</div>';
+    ns.forEach(n => {
+      const u = nameUse(k, n), d = 'data-k="' + k + '" data-n="' + encodeURIComponent(n) + '"';
+      h += '<div class="pk" style="align-items:center"><span style="flex:1"><b>' + esc(n) + '</b><br><span class="s">' + (k === 'ag' ? '用在 ' + u + ' 個組合' : u + ' 筆書') + '</span></span><button class="g cp" ' + d + ' onclick="renameName(this)">改名</button><button class="red cp" ' + d + ' onclick="deleteName(this)">刪除</button></div>';
+    });
+  });
+  document.getElementById('nm').innerHTML = h;
+}
+function renameName(el) {
+  const k = el.dataset.k, old = decodeURIComponent(el.dataset.n);
+  const nn = (prompt('把「' + old + '」改成：', old) || '').trim();
+  if (!nn || nn === old) return;
+  if (allNames(k).includes(nn) && !confirm('已經有「' + nn + '」。要把「' + old + '」合併進去嗎？')) return;
+  books.forEach(b => { if (k === 'ee' && eeOf(b) === old) b.lee = nn; if (k === 'or' && orOf(b) === old) b.lor = nn; });
+  const na = {};
+  Object.keys(agents).forEach(key => {
+    let [e, o] = key.split('||'), a = agents[key];
+    if (k === 'ee' && e === old) e = nn;
+    if (k === 'or' && o === old) o = nn;
+    if (k === 'ag' && a === old) a = nn;
+    na[pkey(e, o)] = a;
+  });
+  agents = na;
+  lists[k] = [...new Set((lists[k] || []).map(x => x === old ? nn : x))];
+  if (k !== 'ag' && ctx[k] === old) ctx[k] = nn;
+  const seen = new Set(), kept = [], before = books.length;
+  byTime(books).forEach(b => { const key = [eeOf(b), orOf(b), b.isbn || ('t:' + b.title)].join('|'); if (!seen.has(key)) { seen.add(key); kept.push(b); } });
+  books = kept.reverse();
+  save(); saveCtx(); renderNm(); render();
+  toast('已改名' + (before > books.length ? '，合併掉 ' + (before - books.length) + ' 筆重複的書' : ''));
+}
+function deleteName(el) {
+  const k = el.dataset.k, n = decodeURIComponent(el.dataset.n), u = nameUse(k, n);
+  if (k === 'ag') {
+    if (!confirm('刪除版代「' + n + '」？' + (u ? '\n' + u + ' 個組合會改回「無版代」，書本身不受影響。' : ''))) return;
+    Object.keys(agents).forEach(key => { if (agents[key] === n) delete agents[key]; });
+    lists.ag = lists.ag.filter(x => x !== n);
+  } else {
+    const msg = u ? '「' + n + '」底下有 ' + u + ' 筆書。\n刪除後這些書會一起刪除，無法復原。\n（如果只是名稱打錯，請改用「改名」。）\n確定要刪除嗎？' : '刪除「' + n + '」？';
+    if (!confirm(msg)) return;
+    books = books.filter(b => (k === 'ee' ? eeOf(b) : orOf(b)) !== n);
+    Object.keys(agents).forEach(key => { const [e, o] = key.split('||'); if ((k === 'ee' && e === n) || (k === 'or' && o === n)) delete agents[key]; });
+    lists[k] = lists[k].filter(x => x !== n);
+    if (ctx[k] === n) ctx[k] = U;
+  }
+  save(); saveCtx(); renderNm(); render();
+}
+function okPub(id) { const b = books.find(x => x.id === id); if (b) { b.pubOk = true; b.guess = false; save(); render(); } }
 function upd(id, f, v) {
   const b = books.find(x => x.id === id); if (!b) return;
   b[f] = v;
@@ -346,11 +470,20 @@ function upd(id, f, v) {
   save(); renderStat();
   setTimeout(() => { const a = document.activeElement; if (!a || !/INPUT|SELECT|TEXTAREA/.test(a.tagName)) render(); }, 300);
 }
-function del(id) { if (confirm('刪除這筆？')) { books = books.filter(b => b.id !== id); save(); render(); } }
+function del(id) {
+  const b = books.find(x => x.id === id); if (!b) return;
+  if (!confirm('刪除這筆？\n' + eeOf(b) + ' × ' + orOf(b) + '\n' + (b.title || b.isbn || ''))) return;
+  books = books.filter(x => x.id !== id); save(); render(); refreshOvl();
+}
+function refreshOvl() {
+  if (document.getElementById('td').style.display === 'block') renderTodo();
+  if (document.getElementById('ov').style.display === 'block') renderOv();
+}
 
 function renderStat() {
   const L = books.filter(inCtx), miss = L.filter(b => !b.title).length, nog = L.filter(b => !b.got).length;
   document.getElementById('stat').textContent = ctx.ee + ' × ' + ctx.or + '：共 ' + L.length + ' 本，缺書名 ' + miss + '，未收檔 ' + nog;
+  const tb = document.getElementById('todoBtn'); if (tb) tb.textContent = '⚠ 待處理 (' + books.filter(b => problems(b).length).length + ')';
 }
 function render() {
   renderStat();
@@ -359,14 +492,14 @@ function render() {
   const ags = [...new Set([...lists.ag, ...Object.values(agents)])], curAg = agentOf(ctx.ee, ctx.or);
   document.getElementById('agSel').innerHTML = '<option value="">無版代（發給授權者）</option>' + ags.map(x => '<option' + (x === curAg ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
   const mine = books.filter(inCtx), order = mine.slice().sort((a, b) => a.ts - b.ts);
-  const inp = (b, f, lab, warn) => '<div class="lb">' + lab + (warn ? ' <span style="color:#b45309">' + warn + '</span>' : '') + '</div><input class="' + (warn ? 'warn' : '') + '" value="' + esc(b[f]) + '" onchange="upd(' + b.id + ',\'' + f + '\',this.value.trim())">';
+  const inp = (b, f, lab, warn) => '<div class="lb">' + lab + (warn ? ' <span style="color:#b45309">' + warn + '</span> <button class="np" style="flex:none;padding:2px 10px;font-size:.75rem;background:#d97706" onclick="okPub(' + b.id + ')">✓ 確認無誤</button>' : '') + '</div><input class="' + (warn ? 'warn' : '') + '" value="' + esc(b[f]) + '" onchange="upd(' + b.id + ',\'' + f + '\',this.value.trim())">';
   document.getElementById('list').innerHTML = mine.map(b => {
     const cls = b.title ? 'ok' : (b.st === 'ok' ? 'part' : (b.st === 'miss' ? 'miss' : 'pending'));
     const lab = { ok: '✓ 已取得', part: '△ 缺書名，請補', miss: '✗ 查無資料，請手動補', pending: '… 查詢中/待補查' }[cls];
     const n = order.findIndex(x => x.id === b.id) + 1;
-    const pw = b.guess ? '⚠ 依 ISBN 推定，請確認' : (b.publisher && b.isbn && b.isbn.startsWith('9784') && isRoman(b.publisher) ? '⚠ 羅馬拼音，請改成日文' : '');
+    const pw = b.pubOk ? '' : b.guess ? '⚠ 依 ISBN 推定，請確認' : (b.publisher && b.isbn && b.isbn.startsWith('9784') && isRoman(b.publisher) ? '⚠ 羅馬拼音，請改成日文' : '');
     const idt = b.manual ? '✏️ 手寫' + (b.type ? '・' + esc(b.type) : '') + (b.isbn ? '　' + esc(b.isbn) : '') : esc(b.isbn);
-    return '<div class="card ' + (cls === 'ok' ? '' : cls) + (b.id === lastId ? ' new' : '') + '"><div class="top"><span><b>第 ' + n + ' 本</b>　' + idt +
+    return '<div id="c_' + b.id + '" class="card ' + (cls === 'ok' ? '' : cls) + (b.id === lastId ? ' new' : '') + '"><div class="top"><span><b>第 ' + n + ' 本</b>　' + idt +
       (b.manual ? '' : ' <span class="badge b-' + cls + '">' + lab + '</span>') + '</span><label class="np" style="font-size:.8rem;margin-left:auto;margin-right:8px"><input type="checkbox" style="width:auto" ' + (b.got ? 'checked ' : '') + 'onchange="upd(' + b.id + ',\'got\',this.checked)"> 已收檔</label><button class="del np" onclick="del(' + b.id + ')">刪除</button></div>' +
       inp(b, 'title', '書名') + inp(b, 'author', '著者') + inp(b, 'illus', '繪者') + inp(b, 'publisher', '出版社', pw) + inp(b, 'date', '出版日') + inp(b, 'note', '備註') +
       (b.dbg ? '<div class="lb" style="margin-top:4px">查詢紀錄：' + esc(b.dbg) + '</div>' : '') + '</div>';
@@ -432,7 +565,7 @@ let ovMode = 'rc', ovTexts = [];
 function openOv() { document.getElementById('ov').style.display = 'block'; renderOv(); }
 function closeOv() { document.getElementById('ov').style.display = 'none'; }
 function setOvMode(m) { ovMode = m; renderOv(); }
-const pubWarn = b => b.guess || (b.publisher && b.isbn && b.isbn.startsWith('9784') && isRoman(b.publisher));
+const pubWarn = b => !b.pubOk && (b.guess || (b.publisher && b.isbn && b.isbn.startsWith('9784') && isRoman(b.publisher)));
 const recOf = b => { const a = agentOf(eeOf(b), orOf(b)); return a ? '日方版代 ' + a : orOf(b); };
 function merge(list) {
   const m = new Map();
@@ -447,7 +580,7 @@ function merge(list) {
 }
 const fmtLine = (b, n, who) => n + '. ' + (b.title || '(書名待補)') + '／' + (b.author || '著者未填') + (b.illus ? '／繪者：' + b.illus : '') + '／' + (b.publisher || '出版社未填') + (b.date ? '／' + b.date : '') + (b.isbn ? '／' + b.isbn : '／書號未填') + (b.manual && b.type ? '／' + b.type : '') + (who ? '（評估：' + who + '）' : '');
 function rowHtml(b, n, who, showGot) {
-  return '<div class="r"><b>' + n + '. ' + (b.title ? esc(b.title) : '<span class="m">⚠ 缺書名</span>') + '</b>' +
+  return '<div class="r"><b>' + n + '. ' + (b.title ? esc(b.title) : '<span class="m">⚠ 缺書名</span>') + '</b>' + (showGot ? '<button class="red cp" style="float:right" onclick="del(' + b.id + ')">刪除</button>' : '') +
     (b.manual ? ' <span class="tg">手寫' + (b.type ? '・' + esc(b.type) : '') + '</span>' : '') +
     (who ? ' <span class="tg">評估：' + esc(who) + '</span>' : '') + (showGot && b.got ? ' <span class="tg">✓已收檔</span>' : '') +
     '<br><span class="s">著者：' + esc(b.author || '—') + (b.illus ? '　繪者：' + esc(b.illus) : '') + '</span>' +
@@ -533,6 +666,7 @@ function addPk() {
   save(); closePk(); render(); toast('已帶入 ' + n + ' 本');
 }
 window.addEventListener('online', () => { if (books.some(b => b.st === 'pending')) relookup(); });
+books.forEach(fixCreators); save();
 render();
 </script>
 </body>
