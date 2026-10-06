@@ -52,6 +52,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <div class="shelf"><label>授權者</label><select id="orSel" onchange="setCtx('or',this.value)"></select><button class="g" onclick="newCtx('or')">＋新增</button></div>
   <div class="shelf"><label>版代</label><select id="agSel" onchange="setAgent(this.value)"></select><button class="g" onclick="newAgent()">＋新增</button></div>
   <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openNm()">✎ 修改或刪除名稱（被授權者／授權者／版代）</button>
+  <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openMvAll()">↪ 把目前這一組的書全部移到別組</button>
   <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
   <div id="reader"></div>
   <video id="vid" playsinline muted autoplay style="display:none;width:100%;border-radius:8px;margin-bottom:10px;background:#000"></video>
@@ -94,6 +95,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 <div id="pk" class="ovl"></div>
 <div id="td" class="ovl"></div>
 <div id="nm" class="ovl"></div>
+<div id="mv" class="ovl"></div>
 <div id="toast"></div>
 <div id="last"></div>
 
@@ -461,6 +463,45 @@ function deleteName(el) {
   }
   save(); saveCtx(); renderNm(); render();
 }
+let mvIds = [];
+function openMvAll() {
+  const ids = books.filter(inCtx).map(b => b.id);
+  if (!ids.length) return toast('這一組沒有書');
+  openMv(ids);
+}
+function openMv(ids) {
+  mvIds = ids;
+  const opt = k => allNames(k).map(n => '<option value="' + esc(n) + '">').join('');
+  document.getElementById('mv').innerHTML = ovlHead('↪ 移到別組', 'closeMv') +
+    '<div class="stat">要移動 ' + ids.length + ' 本（目前：' + esc(ctx.ee) + ' × ' + esc(ctx.or) + '）</div><div class="fm">' +
+    '<label>移到哪一家被授權者</label><input id="mv_ee" list="dl_ee" placeholder="選擇，或輸入新名稱"><datalist id="dl_ee">' + opt('ee') + '</datalist>' +
+    '<label>移到哪一家授權者</label><input id="mv_or" list="dl_or" placeholder="選擇，或輸入新名稱"><datalist id="dl_or">' + opt('or') + '</datalist>' +
+    '<div class="stat">備註、已收檔狀態會跟著書一起移動。版代以目標那一組的設定為準，移完可在主畫面調整。</div>' +
+    '<div class="err" id="mv_err"></div><button style="width:100%;margin-top:12px" onclick="doMv()">移動</button></div>';
+  document.getElementById('mv').style.display = 'block';
+}
+function closeMv() { document.getElementById('mv').style.display = 'none'; }
+function doMv() {
+  const ee = document.getElementById('mv_ee').value.trim(), or = document.getElementById('mv_or').value.trim();
+  const err = t => { document.getElementById('mv_err').textContent = t; };
+  if (!ee || !or) return err('被授權者和授權者都要填');
+  if (ee === U || or === U) return err('請填實際的公司名稱');
+  if (ee === ctx.ee && or === ctx.or) return err('和目前這一組一樣');
+  const key = b => b.isbn || ('t:' + b.title);
+  const have = new Set(books.filter(b => eeOf(b) === ee && orOf(b) === or).map(key));
+  const ids = new Set(mvIds.map(String));
+  let moved = 0, dup = 0;
+  books = books.filter(b => {
+    if (!ids.has(String(b.id))) return true;
+    if (have.has(key(b))) { dup++; return false; }
+    b.lee = ee; b.lor = or; have.add(key(b)); moved++; return true;
+  });
+  if (!lists.ee.includes(ee)) lists.ee.push(ee);
+  if (!lists.or.includes(or)) lists.or.push(or);
+  ctx.ee = ee; ctx.or = or;
+  save(); saveCtx(); closeMv(); render();
+  toast('已移動 ' + moved + ' 本到 ' + ee + ' × ' + or + (dup ? '；' + dup + ' 本目標已有，已合併' : ''));
+}
 function okPub(id) { const b = books.find(x => x.id === id); if (b) { b.pubOk = true; b.guess = false; save(); render(); } }
 function upd(id, f, v) {
   const b = books.find(x => x.id === id); if (!b) return;
@@ -502,7 +543,7 @@ function render() {
     return '<div id="c_' + b.id + '" class="card ' + (cls === 'ok' ? '' : cls) + (b.id === lastId ? ' new' : '') + '"><div class="top"><span><b>第 ' + n + ' 本</b>　' + idt +
       (b.manual ? '' : ' <span class="badge b-' + cls + '">' + lab + '</span>') + '</span><label class="np" style="font-size:.8rem;margin-left:auto;margin-right:8px"><input type="checkbox" style="width:auto" ' + (b.got ? 'checked ' : '') + 'onchange="upd(' + b.id + ',\'got\',this.checked)"> 已收檔</label><button class="del np" onclick="del(' + b.id + ')">刪除</button></div>' +
       inp(b, 'title', '書名') + inp(b, 'author', '著者') + inp(b, 'illus', '繪者') + inp(b, 'publisher', '出版社', pw) + inp(b, 'date', '出版日') + inp(b, 'note', '備註') +
-      (b.dbg ? '<div class="lb" style="margin-top:4px">查詢紀錄：' + esc(b.dbg) + '</div>' : '') + '</div>';
+      (b.dbg ? '<div class="lb" style="margin-top:4px">查詢紀錄：' + esc(b.dbg) + '</div>' : '') + '<div class="np" style="margin-top:6px"><button class="g" style="padding:6px 12px;font-size:.8rem" onclick="openMv([' + b.id + '])">↪ 移到別組</button></div></div>';
   }).join('') || '<div class="stat">尚無紀錄，開始掃描吧</div>';
 }
 
