@@ -53,6 +53,8 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <div class="shelf"><label>版代</label><select id="agSel" onchange="setAgent(this.value)"></select><button class="g" onclick="newAgent()">＋新增</button></div>
   <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openNm()">✎ 修改或刪除名稱（被授權者／授權者／版代）</button>
   <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openMvAll()">↪ 把目前這一組的書全部移到別組</button>
+  <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="if (ctx.or === U) toast('請先選擇授權者'); else document.getElementById('impList').click()">📄 匯入授權者提供的書單（Excel／CSV）</button>
+  <input type="file" id="impList" accept=".xlsx,.xls,.csv" style="display:none" onchange="readList(event)">
   <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
   <div id="reader"></div>
   <video id="vid" playsinline muted autoplay style="display:none;width:100%;border-radius:8px;margin-bottom:10px;background:#000"></video>
@@ -69,11 +71,10 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
     <button class="g" id="todoBtn" onclick="openTodo()">⚠ 待處理 (0)</button>
     <button onclick="openOv()">📋 總覽（發信前確認）</button>
   </div>
-  <details style="margin-bottom:10px"><summary style="padding:8px 2px;font-weight:600;color:#555">更多功能（匯出 CSV、複製文字、備份）</summary>
+  <details style="margin-bottom:10px"><summary style="padding:8px 2px;font-weight:600;color:#555">更多功能（匯出 CSV、備份、清空）</summary>
   <div class="row" style="margin-top:8px">
     <button class="g" onclick="exportOr()">📤 給授權者 CSV</button>
     <button class="g" onclick="exportEe()">📤 給被授權者 CSV</button>
-    <button class="g" onclick="copyOr()">📋 複製給授權者的文字</button>
     <button class="g" onclick="exportAll()">全部 CSV</button>
     <button class="g" onclick="window.print()">列印/PDF</button>
   </div>
@@ -87,6 +88,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   </div>
   </details>
 </div>
+<div class="np" style="margin:8px 0"><input id="q" placeholder="🔍 搜尋書名、著者、出版社、ISBN" oninput="render()"><label style="display:flex;gap:6px;align-items:center;font-size:.8rem;color:#555;margin-top:4px"><input type="checkbox" id="qall" style="width:auto" onchange="render()"> 搜尋所有組合（不只目前這一組）</label></div>
 <div class="stat" id="stat"></div>
 <div id="list"></div>
 </div>
@@ -96,6 +98,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 <div id="td" class="ovl"></div>
 <div id="nm" class="ovl"></div>
 <div id="mv" class="ovl"></div>
+<div id="im" class="ovl"></div>
 <div id="toast"></div>
 <div id="last"></div>
 
@@ -128,7 +131,7 @@ let agents = (() => { try { return JSON.parse(localStorage.getItem('agents_v1'))
 const pkey = (e, o) => e + '||' + o;
 const agentOf = (e, o) => agents[pkey(e, o)] || '';
 const eeOf = b => b.lee || b.shelf || U, orOf = b => b.lor || U;
-const inCtx = b => eeOf(b) === ctx.ee && orOf(b) === ctx.or;
+const inCtx = b => eeOf(b) === ctx.ee && orOf(b) === ctx.or && !b.cand;
 function opts(k) { return [...new Set([U, ...(lists[k] || []), ...books.map(k === 'ee' ? eeOf : orOf)])]; }
 function saveCtx() { try { localStorage.setItem('ctx_v1', JSON.stringify(ctx)); localStorage.setItem('lists_v1', JSON.stringify(lists)); localStorage.setItem('agents_v1', JSON.stringify(agents)); } catch (e) {} }
 function setAgent(v) {
@@ -249,7 +252,7 @@ async function lookup(b) {
 
 function lastMsg(b) {
   const el = document.getElementById('last');
-  const n = books.filter(x => eeOf(x) === eeOf(b) && orOf(x) === orOf(b) && x.ts <= b.ts).length;
+  const n = books.filter(x => eeOf(x) === eeOf(b) && orOf(x) === orOf(b) && !x.cand && x.ts <= b.ts).length;
   const has = b.title || b.author || b.publisher;
   el.className = b.title ? '' : (b.st === 'miss' ? 'r' : 'w');
   el.innerHTML = '✓ 已存入清單：' + esc(eeOf(b)) + ' × ' + esc(orOf(b)) + '（第 ' + n + ' 本）<br>' +
@@ -259,7 +262,7 @@ function lastMsg(b) {
 }
 
 function addIsbn(raw) {
-  if (ctx.ee === U || ctx.or === U) { toast('請先選擇被授權者與授權者'); return false; }
+  if (ctx.or === U) { toast('請先選擇授權者（被授權者可以先不選）'); return false; }
   const isbn = normIsbn(raw);
   if (!check13(isbn)) { toast(/^\d+$/.test(isbn) && isbn.length !== 13 ? 'ISBN 需要 13 碼，你輸入了 ' + isbn.length + ' 碼' : 'ISBN 檢查碼不符，請再核對一次'); return false; }
   if (books.some(b => b.isbn === isbn && inCtx(b))) { toast('已在清單中'); return false; }
@@ -290,7 +293,7 @@ async function toggleCam() {
     scanner = null;
     rd.style.display = 'none'; btn.textContent = '📷 開始連續掃描'; btn.className = 'ok'; scanning = false; return;
   }
-  if (ctx.ee === U || ctx.or === U) { alert('請先選擇「被授權者」與「授權者」，再開始掃描'); return; }
+  if (ctx.or === U) { alert('請先選擇「授權者」再開始掃描。\n被授權者可以先不選，之後再分配。'); return; }
   if (window.BarcodeDetector) {
     document.getElementById('scanInfo').textContent = '載入辨識引擎中…（第一次需要幾秒鐘）';
     try {
@@ -351,7 +354,7 @@ function onScan(text) {
 }
 
 async function relookup() {
-  const todo = books.filter(b => !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title));
+  const todo = books.filter(b => !b.cand && !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title));
   if (!todo.length) return toast('沒有需要補查的書');
   toast('補查 ' + todo.length + ' 本…');
   await Promise.all(todo.map(b => { b.st = 'pending'; return lookup(b); }));
@@ -372,17 +375,19 @@ function clearAll() {
 }
 function problems(b) {
   const r = [];
+  if (b.cand) return r;
   if (!b.manual && b.st === 'pending') r.push('待補查（當時連不上網）');
   if (b.st === 'miss') r.push('查無資料');
   if (!b.title && !r.length) r.push('缺書名');
   if (pubWarn(b)) r.push('出版社待確認');
+  if (eeOf(b) === U) r.push('尚未指定被授權者');
   return r;
 }
 function openTodo() { document.getElementById('td').style.display = 'block'; renderTodo(); }
 function closeTodo() { document.getElementById('td').style.display = 'none'; }
 function renderTodo() {
   const L = byTime(books).filter(b => problems(b).length);
-  const re = books.filter(b => !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title)).length;
+  const re = books.filter(b => !b.cand && !b.manual && /^97/.test(b.isbn) && (b.st !== 'ok' || !b.title)).length;
   let h = ovlHead('⚠ 待處理（' + L.length + ' 本）', 'closeTodo') +
     '<div class="stat">所有組合裡還需要處理的書都列在這裡。「前往」會跳到那本書的書卡，補好後這裡就會消失。</div>' +
     '<button style="width:100%;margin:6px 0 10px"' + (re ? '' : ' disabled') + ' onclick="relookup()">🔄 重新連網查詢（' + re + ' 本）</button>';
@@ -502,6 +507,80 @@ function doMv() {
   save(); saveCtx(); closeMv(); render();
   toast('已移動 ' + moved + ' 本到 ' + ee + ' × ' + or + (dup ? '；' + dup + ' 本目標已有，已合併' : ''));
 }
+let impSt = null;
+const FIELDS = [['title', '書名'], ['author', '著者'], ['illus', '繪者'], ['publisher', '出版社'], ['date', '出版日'], ['isbn', 'ISBN / 書號']];
+const KW = { isbn: ['isbn', '書號', 'ean', 'jan'], title: ['書名', 'タイトル', 'title', '作品名', '書籍名', '題名'], illus: ['繪者', '画', '絵', 'illustrator', 'イラスト', '畫'], author: ['著者', '作者', 'author', '作家', '原作'], date: ['出版日', '発売', '発行日', '刊行', '出版年', 'date', '出版時間'], publisher: ['出版社', '発行所', '出版者', 'publisher', '版元', '出版元'] };
+function detect(rows) {
+  let hi = 0;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) { if (rows[i].some(c => Object.values(KW).some(ks => ks.some(k => String(c).toLowerCase().includes(k))))) { hi = i; break; } }
+  const head = rows[hi].map(c => String(c).trim().toLowerCase()), used = new Set(), map = {};
+  ['isbn', 'title', 'illus', 'author', 'date', 'publisher'].forEach(f => {
+    const j = head.findIndex((h, i) => h && !used.has(i) && KW[f].some(k => h.includes(k)));
+    map[f] = j; if (j >= 0) used.add(j);
+  });
+  return { hi, map };
+}
+function loadXlsx() {
+  return window.XLSX ? Promise.resolve() : new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    sc.onload = res; sc.onerror = () => rej(new Error('load')); document.head.appendChild(sc);
+  });
+}
+async function readList(ev) {
+  const f = ev.target.files[0]; ev.target.value = '';
+  if (!f) return;
+  if (ctx.or === U) return toast('請先選擇授權者');
+  try {
+    toast('讀取中…');
+    await loadXlsx();
+    const buf = await f.arrayBuffer();
+    let wb;
+    if (/\.csv$/i.test(f.name)) {
+      let t; try { t = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { t = new TextDecoder('shift_jis').decode(buf); }
+      wb = XLSX.read(t, { type: 'string' });
+    } else wb = XLSX.read(buf, { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }).filter(r => r.some(c => String(c).trim()));
+    if (rows.length < 2) return toast('檔案裡沒有資料');
+    const d = detect(rows);
+    impSt = { rows, hi: d.hi, map: d.map, name: f.name };
+    openIm();
+  } catch (e) { toast('無法讀取這個檔案（第一次需要網路載入讀取程式）'); }
+}
+const imCell = (r, c) => c >= 0 && r[c] != null ? String(r[c]).trim() : '';
+const fmtSerial = n => { const d = new Date(Math.round((n - 25569) * 864e5)); return d.getUTCFullYear() + '/' + (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
+function imMap() { const m = {}; FIELDS.forEach(([f]) => { m[f] = +document.getElementById('im_' + f).value; }); return m; }
+function imPrev() {
+  const m = imMap(), r = impSt.rows.slice(impSt.hi + 1, impSt.hi + 4);
+  document.getElementById('im_prev').innerHTML = '預覽前 3 列：<br>' + r.map(x => esc(imCell(x, m.title)) + '／' + esc(imCell(x, m.author)) + '／' + esc(imCell(x, m.publisher)) + '／' + esc(imCell(x, m.isbn))).join('<br>');
+}
+function openIm() {
+  const { rows, hi, map } = impSt, head = rows[hi];
+  const opts = f => '<option value="-1">（不匯入）</option>' + head.map((h, i) => '<option value="' + i + '"' + (map[f] === i ? ' selected' : '') + '>第 ' + (i + 1) + ' 欄：' + esc(String(h).slice(0, 14)) + '</option>').join('');
+  document.getElementById('im').innerHTML = ovlHead('📄 匯入「' + esc(ctx.or) + '」的書單', 'closeIm') +
+    '<div class="stat">檔案：' + esc(impSt.name) + '｜共 ' + (rows.length - hi - 1) + ' 列。請確認每個欄位對到哪一欄。匯入的書放在這家授權者的「可挑選書單」，不會列入寄出清單。</div><div class="fm">' +
+    FIELDS.map(([f, lab]) => '<label>' + lab + '</label><select id="im_' + f + '" onchange="imPrev()">' + opts(f) + '</select>').join('') +
+    '<div class="stat" id="im_prev"></div><button style="width:100%;margin-top:12px" onclick="doIm()">匯入</button></div>';
+  document.getElementById('im').style.display = 'block'; imPrev();
+}
+function closeIm() { document.getElementById('im').style.display = 'none'; }
+function doIm() {
+  const m = imMap();
+  if (m.title < 0 && m.isbn < 0) return toast('至少要指定「書名」或「ISBN」欄');
+  const key = b => b.isbn || ('t:' + b.title);
+  const have = new Set(books.filter(b => orOf(b) === ctx.or).map(key));
+  let add = 0, skip = 0; const t = Date.now();
+  impSt.rows.slice(impSt.hi + 1).forEach((r, i) => {
+    const raw = imCell(r, m.isbn), isbn = raw ? normIsbn(raw) : '', dv = m.date >= 0 ? r[m.date] : '';
+    const b = { id: t + i + Math.random(), isbn: check13(isbn) ? isbn : '', title: imCell(r, m.title), author: imCell(r, m.author), illus: imCell(r, m.illus), publisher: imCell(r, m.publisher), date: typeof dv === 'number' && dv > 20000 ? fmtSerial(dv) : imCell(r, m.date), note: '', type: '', st: 'ok', ts: t + i, lee: U, lor: ctx.or, got: false, cand: true, dbg: '來自匯入書單「' + impSt.name + '」' };
+    if (!b.title && !b.isbn) return;
+    fixCreators(b);
+    const k = key(b);
+    if (have.has(k)) { skip++; return; }
+    have.add(k); books.push(b); add++;
+  });
+  save(); closeIm(); render();
+  toast('已匯入 ' + add + ' 本' + (skip ? '，' + skip + ' 本已存在而略過' : '') + '。開會時按「從授權者已有的書挑選」勾選');
+}
 function okPub(id) { const b = books.find(x => x.id === id); if (b) { b.pubOk = true; b.guess = false; save(); render(); } }
 function upd(id, f, v) {
   const b = books.find(x => x.id === id); if (!b) return;
@@ -524,6 +603,7 @@ function refreshOvl() {
 function renderStat() {
   const L = books.filter(inCtx), miss = L.filter(b => !b.title).length, nog = L.filter(b => !b.got).length;
   document.getElementById('stat').textContent = ctx.ee + ' × ' + ctx.or + '：共 ' + L.length + ' 本，缺書名 ' + miss + '，未收檔 ' + nog;
+  if (ctx.ee === U && ctx.or !== U) document.getElementById('stat').textContent += '　（尚未指定被授權者，之後可用「移到別組」或「從授權者已有的書挑選」分配）';
   const tb = document.getElementById('todoBtn'); if (tb) tb.textContent = '⚠ 待處理 (' + books.filter(b => problems(b).length).length + ')';
 }
 function render() {
@@ -532,19 +612,21 @@ function render() {
   ['ee', 'or'].forEach(k => { document.getElementById(k + 'Sel').innerHTML = opts(k).map(x => '<option' + (x === ctx[k] ? ' selected' : '') + '>' + esc(x) + '</option>').join(''); });
   const ags = [...new Set([...lists.ag, ...Object.values(agents)])], curAg = agentOf(ctx.ee, ctx.or);
   document.getElementById('agSel').innerHTML = '<option value="">無版代（發給授權者）</option>' + ags.map(x => '<option' + (x === curAg ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
-  const mine = books.filter(inCtx), order = mine.slice().sort((a, b) => a.ts - b.ts);
+  const qv = (document.getElementById('q').value || '').trim().toLowerCase(), qall = document.getElementById('qall').checked;
+  const hit = b => !qv || [b.title, b.author, b.illus, b.publisher, b.isbn, b.note].join(' ').toLowerCase().includes(qv);
+  const mine = (qv && qall) ? books.filter(b => !b.cand && hit(b)) : books.filter(inCtx).filter(hit);
   const inp = (b, f, lab, warn) => '<div class="lb">' + lab + (warn ? ' <span style="color:#b45309">' + warn + '</span> <button class="np" style="flex:none;padding:2px 10px;font-size:.75rem;background:#d97706" onclick="okPub(' + b.id + ')">✓ 確認無誤</button>' : '') + '</div><input class="' + (warn ? 'warn' : '') + '" value="' + esc(b[f]) + '" onchange="upd(' + b.id + ',\'' + f + '\',this.value.trim())">';
   document.getElementById('list').innerHTML = mine.map(b => {
     const cls = b.title ? 'ok' : (b.st === 'ok' ? 'part' : (b.st === 'miss' ? 'miss' : 'pending'));
     const lab = { ok: '✓ 已取得', part: '△ 缺書名，請補', miss: '✗ 查無資料，請手動補', pending: '… 查詢中/待補查' }[cls];
-    const n = order.findIndex(x => x.id === b.id) + 1;
+    const n = books.filter(x => !x.cand && eeOf(x) === eeOf(b) && orOf(x) === orOf(b) && x.ts <= b.ts).length;
     const pw = b.pubOk ? '' : b.guess ? '⚠ 依 ISBN 推定，請確認' : (b.publisher && b.isbn && b.isbn.startsWith('9784') && isRoman(b.publisher) ? '⚠ 羅馬拼音，請改成日文' : '');
     const idt = b.manual ? '✏️ 手寫' + (b.type ? '・' + esc(b.type) : '') + (b.isbn ? '　' + esc(b.isbn) : '') : esc(b.isbn);
-    return '<div id="c_' + b.id + '" class="card ' + (cls === 'ok' ? '' : cls) + (b.id === lastId ? ' new' : '') + '"><div class="top"><span><b>第 ' + n + ' 本</b>　' + idt +
+    return '<div id="c_' + b.id + '" class="card ' + (cls === 'ok' ? '' : cls) + (b.id === lastId ? ' new' : '') + '"><div class="top"><span><b>第 ' + n + ' 本</b>　' + idt + (qv && qall ? ' <span class="s">[' + esc(eeOf(b)) + ' × ' + esc(orOf(b)) + ']</span>' : '') +
       (b.manual ? '' : ' <span class="badge b-' + cls + '">' + lab + '</span>') + '</span><label class="np" style="font-size:.8rem;margin-left:auto;margin-right:8px"><input type="checkbox" style="width:auto" ' + (b.got ? 'checked ' : '') + 'onchange="upd(' + b.id + ',\'got\',this.checked)"> 已收檔</label><button class="del np" onclick="del(' + b.id + ')">刪除</button></div>' +
       inp(b, 'title', '書名') + inp(b, 'author', '著者') + inp(b, 'illus', '繪者') + inp(b, 'publisher', '出版社', pw) + inp(b, 'date', '出版日') + inp(b, 'note', '備註') +
       (b.dbg ? '<div class="lb" style="margin-top:4px">查詢紀錄：' + esc(b.dbg) + '</div>' : '') + '<div class="np" style="margin-top:6px"><button class="g" style="padding:6px 12px;font-size:.8rem" onclick="openMv([' + b.id + '])">↪ 移到別組</button></div></div>';
-  }).join('') || '<div class="stat">尚無紀錄，開始掃描吧</div>';
+  }).join('') || '<div class="stat">' + (qv ? '沒有符合的書' : '尚無紀錄，開始掃描吧') + '</div>';
 }
 
 async function dl(name, mime, text) {
@@ -559,17 +641,41 @@ async function dl(name, mime, text) {
 function csvOut(L, name, withGot) {
   if (!L.length) return toast('沒有資料');
   const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
-  const head = ['被授權者', '授權者', '版代', '序號', '書名', '著者', '繪者', '出版社', '出版日', '書號', '類型'].concat(withGot ? ['收檔'] : [], ['備註']);
+  const head = ['授權者', '序號', '書名', '著者', '繪者', '出版社', '版代', '出版日', '書號', '類型'].concat(withGot ? ['收檔'] : [], ['備註', '被授權者']);
   const rows = [head.map(q).join(',')];
-  L.forEach((b, i) => rows.push([eeOf(b), orOf(b), agentOf(eeOf(b), orOf(b)), i + 1, b.title, b.author, b.illus, b.publisher, b.date, '="' + (b.isbn || '') + '"', b.type || ''].concat(withGot ? [b.got ? '已收到' : '未收到'] : [], [b.note]).map(q).join(',')));
+  L.forEach((b, i) => rows.push([orOf(b), i + 1, b.title, b.author, b.illus, b.publisher, agentOf(eeOf(b), orOf(b)), b.date, (b.isbn ? '="' + b.isbn + '"' : ''), b.type || ''].concat(withGot ? [b.got ? '已收到' : '未收到'] : [], [b.note, eeOf(b)]).map(q).join(',')));
   dl(name + '_' + new Date().toISOString().slice(0, 10) + '.csv', 'text/csv;charset=utf-8', '\ufeff' + rows.join('\r\n'));
 }
+function csvMerged(list, name, withGot, pool) {
+  const m = new Map();
+  byTime(list.filter(b => !b.cand && (pool || eeOf(b) !== U))).forEach(b => {
+    const k = orOf(b) + '|' + (b.isbn || ('t:' + b.title));
+    if (!m.has(k)) m.set(k, { b, ees: [], ags: [], got: [], notes: [] });
+    const e = m.get(k), ee = eeOf(b), ag = agentOf(ee, orOf(b));
+    if (!e.ees.includes(ee)) e.ees.push(ee);
+    if (ag && !e.ags.includes(ag)) e.ags.push(ag);
+    if (b.got && !e.got.includes(ee)) e.got.push(ee);
+    if (b.note) e.notes.push(ee + '：' + b.note);
+    if (!e.b.title && b.title) e.b = b;
+  });
+  const rows = [...m.values()].sort((a, c) => orOf(a.b).localeCompare(orOf(c.b)));
+  if (!rows.length) return toast('沒有資料');
+  const n = Math.max(...rows.map(r => r.ees.length));
+  const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+  const head = ['授權者', '序號', '書名', '著者', '繪者', '出版社', '版代', '出版日', '書號', '類型'].concat(withGot ? ['已收檔'] : [], ['備註'], Array.from({ length: n }, (_, i) => '被授權者' + (i + 1)));
+  const cnt = {}, out = [head.map(q).join(',')];
+  rows.forEach(r => {
+    const b = r.b, o = orOf(b); cnt[o] = (cnt[o] || 0) + 1;
+    out.push([o, cnt[o], b.title, b.author, b.illus, b.publisher, r.ags.join('、'), b.date, (b.isbn ? '="' + b.isbn + '"' : ''), b.type || ''].concat(withGot ? [r.got.join('、')] : [], [r.notes.join('；')], r.ees.concat(Array(n - r.ees.length).fill(''))).map(q).join(','));
+  });
+  dl(name + '_' + new Date().toISOString().slice(0, 10) + '.csv', 'text/csv;charset=utf-8', '\ufeff' + out.join('\r\n'));
+}
 const byTime = L => L.slice().sort((a, b) => a.ts - b.ts);
-function exportOr() { csvOut(byTime(books.filter(b => orOf(b) === ctx.or)), '評估申請_給' + ctx.or, false); }
-function exportEe() { csvOut(byTime(books.filter(b => eeOf(b) === ctx.ee)).sort((a, b) => orOf(a).localeCompare(orOf(b))), '申請一覽_' + ctx.ee, true); }
-function exportAll() { csvOut(byTime(books), '索書清單_全部', true); }
+function exportOr() { csvMerged(books.filter(b => orOf(b) === ctx.or), '評估申請_給' + ctx.or, false, false); }
+function exportEe() { csvOut(byTime(books.filter(b => eeOf(b) === ctx.ee && !b.cand)).sort((a, b) => orOf(a).localeCompare(orOf(b))), '申請一覽_' + ctx.ee, true); }
+function exportAll() { csvMerged(books, '索書清單_全部', true, true); }
 function copyOr() {
-  const L = byTime(books.filter(b => orOf(b) === ctx.or));
+  const L = byTime(books.filter(b => orOf(b) === ctx.or && !b.cand && eeOf(b) !== U));
   if (!L.length) return toast('沒有資料');
   const g = {}; L.forEach(b => (g[eeOf(b)] = g[eeOf(b)] || []).push(b));
   const t = Object.keys(g).map(k => '【' + k + '】\n' + g[k].map((b, i) => (i + 1) + '. ' + (b.title || '(書名待補)') + '／' + (b.publisher || '') + '／' + b.isbn).join('\n')).join('\n\n');
@@ -602,7 +708,7 @@ function importJSON(ev) {
   r.readAsText(f);
 }
 
-let ovMode = 'rc', ovTexts = [];
+let ovMode = 'rc', ovTexts = [], ovKeys = [];
 function openOv() { document.getElementById('ov').style.display = 'block'; renderOv(); }
 function closeOv() { document.getElementById('ov').style.display = 'none'; }
 function setOvMode(m) { ovMode = m; renderOv(); }
@@ -628,15 +734,18 @@ function rowHtml(b, n, who, showGot) {
     '<br><span class="s">' + esc(b.publisher || '出版社未填') + (pubWarn(b) ? ' <span class="m">⚠ 待確認</span>' : '') + (b.date ? '　' + esc(b.date) : '') + '　' + esc(b.isbn || '書號未填') + '</span></div>';
 }
 function renderOv() {
-  ovTexts = [];
-  const miss = books.filter(b => !b.title).length, pw = books.filter(pubWarn).length, got = books.filter(b => b.got).length;
+  const BK = books.filter(b => !b.cand);
+  ovTexts = []; ovKeys = [];
+  const miss = BK.filter(b => !b.title).length, pw = BK.filter(pubWarn).length, got = BK.filter(b => b.got).length;
   let h = '<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:1.1rem">📋 總覽（合併顯示）</b><button class="red" style="flex:0 0 auto" onclick="closeOv()">關閉</button></div>' +
     '<div class="tabs"><button class="' + (ovMode === 'rc' ? '' : 'g') + '" onclick="setOvMode(\'rc\')">依發信對象</button><button class="' + (ovMode === 'ee' ? '' : 'g') + '" onclick="setOvMode(\'ee\')">依被授權者</button></div>' +
-    '<div class="stat">共 ' + books.length + ' 筆｜⚠ 缺書名 ' + miss + '｜⚠ 出版社待確認 ' + pw + '｜已收檔 ' + got + '</div>';
-  if (!books.length) h += '<div class="stat">尚無紀錄</div>';
+    '<div class="stat">共 ' + BK.length + ' 筆｜⚠ 缺書名 ' + miss + '｜⚠ 出版社待確認 ' + pw + '｜已收檔 ' + got + '</div>';
+  if (!BK.length) h += '<div class="stat">尚無紀錄</div>';
+  const pool = BK.filter(b => eeOf(b) === U).length;
+  if (ovMode === 'rc' && pool) h += '<div class="stat" style="color:#b45309">⚠ 有 ' + pool + ' 本尚未指定被授權者，沒有列在下面的寄出清單裡。</div>';
   const groups = {};
   if (ovMode === 'rc') {
-    byTime(books).forEach(b => { const r = recOf(b), o = orOf(b); ((groups[r] = groups[r] || {})[o] = groups[r][o] || []).push(b); });
+    byTime(BK).forEach(b => { if (eeOf(b) === U) return; const r = recOf(b), o = orOf(b); ((groups[r] = groups[r] || {})[o] = groups[r][o] || []).push(b); });
     Object.keys(groups).sort().forEach(r => {
       const viaAgent = r.startsWith('日方版代 ');
       let total = 0, body = '', txt = '【' + r + '】\n';
@@ -646,11 +755,11 @@ function renderOv() {
         items.forEach((e, i) => { const who = e.ees.join('、') + (e.ees.length > 1 ? '（' + e.ees.length + ' 家）' : ''); body += rowHtml(e.b, i + 1, who, false); txt += fmtLine(e.b, i + 1, who) + '\n'; });
         txt += '\n';
       });
-      h += '<h3><span>' + esc(r) + '（共 ' + total + ' 本）</span><button class="cp" onclick="copyGroup(' + ovTexts.length + ')">複製文字</button></h3>' + body;
-      ovTexts.push(txt.trim());
+      h += '<h3><span>' + esc(r) + '（共 ' + total + ' 本）</span><span><button class="cp" onclick="copyGroup(' + ovTexts.length + ')">複製文字</button> <button class="cp" onclick="csvGroup(' + ovTexts.length + ')">附件 CSV</button></span></h3>' + body;
+      ovKeys.push({ mode: 'rc', key: r }); ovTexts.push(txt.trim());
     });
   } else {
-    byTime(books).forEach(b => { const e = eeOf(b), o = orOf(b); ((groups[e] = groups[e] || {})[o] = groups[e][o] || []).push(b); });
+    byTime(BK).forEach(b => { const e = eeOf(b), o = orOf(b); ((groups[e] = groups[e] || {})[o] = groups[e][o] || []).push(b); });
     Object.keys(groups).sort().forEach(e => {
       let total = 0, body = '', txt = '【' + e + '】\n';
       Object.keys(groups[e]).sort().forEach(o => {
@@ -660,18 +769,23 @@ function renderOv() {
         L.forEach((b, i) => { body += rowHtml(b, i + 1, '', true); txt += fmtLine(b, i + 1, '') + '\n'; });
         txt += '\n';
       });
-      h += '<h3><span>' + esc(e) + '（共 ' + total + ' 本）</span><button class="cp" onclick="copyGroup(' + ovTexts.length + ')">複製文字</button></h3>' + body;
-      ovTexts.push(txt.trim());
+      h += '<h3><span>' + esc(e) + '（共 ' + total + ' 本）</span><span><button class="cp" onclick="copyGroup(' + ovTexts.length + ')">複製文字</button> <button class="cp" onclick="csvGroup(' + ovTexts.length + ')">附件 CSV</button></span></h3>' + body;
+      ovKeys.push({ mode: 'ee', key: e }); ovTexts.push(txt.trim());
     });
   }
   document.getElementById('ov').innerHTML = h;
 }
 function copyText(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('已複製'), () => prompt('請手動複製', t)); }
 function copyGroup(i) { copyText(ovTexts[i]); }
+function csvGroup(i) {
+  const g = ovKeys[i];
+  if (g.mode === 'rc') csvMerged(books.filter(b => !b.cand && eeOf(b) !== U && recOf(b) === g.key), '評估申請_給' + g.key, false, false);
+  else csvOut(byTime(books.filter(b => !b.cand && eeOf(b) === g.key)).sort((a, b) => orOf(a).localeCompare(orOf(b))), '申請一覽_' + g.key, true);
+}
 
 function ovlHead(title, closeFn) { return '<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:1.1rem">' + title + '</b><button class="red" style="flex:0 0 auto" onclick="' + closeFn + '()">關閉</button></div>'; }
 function openFm() {
-  if (ctx.ee === U || ctx.or === U) return toast('請先選擇被授權者與授權者');
+  if (ctx.or === U) return toast('請先選擇授權者（被授權者可以先不選）');
   const f = (id, lab, ph) => '<label>' + lab + '</label><input id="fm_' + id + '" placeholder="' + (ph || '') + '">';
   document.getElementById('fm').innerHTML = ovlHead('✏️ 手寫新增一本', 'closeFm') + '<div class="stat">' + esc(ctx.ee) + ' × ' + esc(ctx.or) + '　只有書名必填，其他可留白</div><div class="fm">' +
     f('title', '書名（必填）') + f('author', '著者') + f('illus', '繪者') + f('publisher', '出版社') + f('date', '出版日（未出版可填預定日期）', '例如 2026年12月') + f('isbn', '書號（選填：ISBN 或電子書 ASIN）') +
@@ -690,11 +804,28 @@ function openPk() {
   if (ctx.ee === U || ctx.or === U) return toast('請先選擇被授權者與授權者');
   const key = b => b.isbn || ('t:' + b.title);
   const have = new Set(books.filter(inCtx).map(key)), seen = new Set(), L = [];
-  byTime(books).forEach(b => { const k = key(b); if (orOf(b) === ctx.or && !inCtx(b) && !have.has(k) && !seen.has(k)) { seen.add(k); L.push(b); } });
-  document.getElementById('pk').innerHTML = ovlHead('📥 從「' + esc(ctx.or) + '」已有的書挑選', 'closePk') + '<div class="stat">勾選後加入「' + esc(ctx.ee) + '」</div>' +
-    (L.length ? L.map(b => '<label class="pk"><input type="checkbox" value="' + b.id + '"><span><b>' + esc(b.title || '（缺書名）') + '</b><br><span class="s">' + esc(b.publisher || '') + '　' + esc(b.isbn || '') + '<br>已選：' + esc([...new Set(books.filter(x => key(x) === key(b) && orOf(x) === ctx.or).map(eeOf))].join('、')) + '</span></span></label>').join('') +
-      '<button style="width:100%;margin-top:12px" onclick="addPk()">加入選取的書</button>' : '<div class="stat">這家授權者目前沒有其他被授權者選的書可挑</div>');
+  const ord = byTime(books);
+  [...ord.filter(b => !b.cand), ...ord.filter(b => b.cand)].forEach(b => { const k = key(b); if (orOf(b) === ctx.or && !inCtx(b) && !have.has(k) && !seen.has(k)) { seen.add(k); L.push(b); } });
+  const nc = books.filter(b => b.cand && orOf(b) === ctx.or).length;
+  const who = b => [...new Set(books.filter(x => key(x) === key(b) && orOf(x) === ctx.or && !x.cand).map(x => eeOf(x) === U ? '尚未分配' : eeOf(x)))];
+  document.getElementById('pk').innerHTML = ovlHead('📥 從「' + esc(ctx.or) + '」已有的書挑選', 'closePk') +
+    '<div class="stat">勾選後按「加入選取的書」，會加進「' + esc(ctx.ee) + '」。搜尋時，先勾的書不會被取消。</div>' +
+    '<input id="pk_q" placeholder="🔍 搜尋書名、著者、出版社、ISBN" oninput="filterPk()" style="margin-bottom:6px">' +
+    (L.length ? '<div style="display:flex;gap:8px;margin:6px 0"><button class="g" style="flex:1" onclick="selVisible()">☑ 選取目前顯示的</button><button style="flex:1" onclick="addPk()">加入選取的書</button></div>' : '') +
+    (L.length ? L.map(b => { const w = who(b); return '<label class="pk" data-t="' + esc([b.title, b.author, b.illus, b.publisher, b.isbn].join(' ').toLowerCase()) + '"><input type="checkbox" value="' + b.id + '"><span><b>' + esc(b.title || '（缺書名）') + '</b><br><span class="s">' + esc([b.author, b.publisher].filter(Boolean).join('／')) + '　' + esc(b.isbn || '') + '<br>' + (w.length ? '已選：' + esc(w.join('、')) : '授權者書單，尚無人選') + '</span></span></label>'; }).join('')
+      : '<div class="stat">這家授權者目前沒有可挑的書</div>') +
+    (nc ? '<button class="red" style="width:100%;margin-top:14px" onclick="clearCand()">清除這家授權者的匯入書單（' + nc + ' 本）</button>' : '');
   document.getElementById('pk').style.display = 'block';
+}
+function filterPk() {
+  const q = document.getElementById('pk_q').value.trim().toLowerCase();
+  document.querySelectorAll('#pk .pk').forEach(el => { el.style.display = (!q || (el.dataset.t || '').includes(q)) ? '' : 'none'; });
+}
+function selVisible() { document.querySelectorAll('#pk .pk').forEach(el => { if (el.style.display !== 'none') el.querySelector('input').checked = true; }); }
+function clearCand() {
+  const n = books.filter(b => b.cand && orOf(b) === ctx.or).length;
+  if (!confirm('清除「' + ctx.or + '」匯入的書單 ' + n + ' 本？\n已經加進被授權者清單的書不受影響。')) return;
+  books = books.filter(b => !(b.cand && orOf(b) === ctx.or)); save(); openPk(); render();
 }
 function closePk() { document.getElementById('pk').style.display = 'none'; }
 function addPk() {
@@ -702,7 +833,9 @@ function addPk() {
   let n = 0;
   ids.forEach(id => {
     const s = books.find(x => String(x.id) === id); if (!s) return;
-    books.unshift(Object.assign({}, s, { id: Date.now() + Math.random(), lee: ctx.ee, lor: ctx.or, got: false, note: '', ts: Date.now() + n, dbg: '由「' + eeOf(s) + '」的清單帶入' })); n++;
+    const b = Object.assign({}, s, { id: Date.now() + Math.random(), lee: ctx.ee, lor: ctx.or, got: false, cand: false, note: '', ts: Date.now() + n, dbg: s.cand ? '由授權者書單帶入' : '由「' + eeOf(s) + '」的清單帶入' });
+    books.unshift(b); n++;
+    if (!b.title && b.isbn) { b.st = 'pending'; lookup(b); }
   });
   save(); closePk(); render(); toast('已帶入 ' + n + ' 本');
 }
