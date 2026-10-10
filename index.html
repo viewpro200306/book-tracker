@@ -41,6 +41,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 #td .r{padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:.88rem;line-height:1.5}#td .tg{font-size:.72rem;padding:1px 6px;border-radius:6px}#td .cp{flex:0 0 auto;padding:6px 14px;font-size:.8rem}
 #nm .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
 #isbnErr{display:none}#isbnErr.on{display:block;margin:-4px 0 10px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:6px;font-size:.88rem;line-height:1.45}
+#ag .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:9px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:30}
 @media print{.np{display:none!important}body{background:#fff;padding:0}.wrap{padding:0}.card input{border:0;padding:2px}}
 </style>
@@ -62,6 +63,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <div id="scanInfo" class="stat"></div>
   <div class="add">
     <input id="isbnIn" oninput="clrErr()" type="text" inputmode="numeric" placeholder="手動輸入 ISBN，或貼上 Amazon 網址">
+    <button class="g" style="flex:0 0 52px" onclick="clearIsbn()" aria-label="清除輸入">✕</button>
     <button onclick="manualAdd()">加入</button>
   </div>
   <div id="isbnErr"></div>
@@ -75,6 +77,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   </div>
   <details style="margin-bottom:10px"><summary style="padding:8px 2px;font-weight:600;color:#555">更多功能（匯出 CSV、備份、清空）</summary>
   <div class="row" style="margin-top:8px">
+    <button class="g" onclick="openAg()">📤 給版代 CSV／文字</button>
     <button class="g" onclick="exportOr()">📤 給授權者 CSV</button>
     <button class="g" onclick="exportEe()">📤 給被授權者 CSV</button>
     <button class="g" onclick="exportAll()">全部 CSV</button>
@@ -101,6 +104,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 <div id="nm" class="ovl"></div>
 <div id="mv" class="ovl"></div>
 <div id="im" class="ovl"></div>
+<div id="ag" class="ovl"></div>
 <div id="toast"></div>
 <div id="last"></div>
 
@@ -287,6 +291,7 @@ function urlToIsbn(raw) {
   if (g) return { v: g };
   return { err: '這個網址裡找不到 ISBN' };
 }
+function clearIsbn() { const i = document.getElementById('isbnIn'); i.value = ''; clrErr(); i.focus(); }
 function clrErr() { const e = document.getElementById('isbnErr'); e.textContent = ''; e.className = ''; }
 function fail(m) { toast(m); const e = document.getElementById('isbnErr'); e.textContent = '⚠ ' + m; e.className = 'on'; return false; }
 function addIsbn(raw) {
@@ -513,7 +518,8 @@ function openMv(ids) {
     '<div class="stat">要移動 ' + ids.length + ' 本（目前：' + esc(ctx.ee) + ' × ' + esc(ctx.or) + '）</div><div class="fm">' +
     '<label>移到哪一家被授權者</label><input id="mv_ee" list="dl_ee" placeholder="選擇，或輸入新名稱"><datalist id="dl_ee">' + opt('ee') + '</datalist>' +
     '<label>移到哪一家授權者</label><input id="mv_or" list="dl_or" placeholder="選擇，或輸入新名稱"><datalist id="dl_or">' + opt('or') + '</datalist>' +
-    '<div class="stat">備註會跟著書一起移動。版代以目標那一組的設定為準，移完可在主畫面調整。</div>' +
+    '<label>版代</label><select id="mv_ag"><option value="__keep">沿用目標那一組現有的設定</option><option value="">無版代（直接發給授權者）</option>' + [...new Set([...lists.ag, ...Object.values(agents)])].map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('') + '</select><input id="mv_ag2" placeholder="或輸入新的版代名稱" style="margin-top:6px">' +
+    '<div class="stat">備註會跟著書一起移動。版代是設定在「被授權者 × 授權者」這一組上，會套用到那一組的所有書。如果目標組和目前這一組相同，只填版代，就是單純替這一組設定版代，書不會移動。</div>' +
     '<div class="err" id="mv_err"></div><button style="width:100%;margin-top:12px" onclick="doMv()">移動</button></div>';
   document.getElementById('mv').style.display = 'block';
 }
@@ -523,7 +529,12 @@ function doMv() {
   const err = t => { document.getElementById('mv_err').textContent = t; };
   if (!ee || !or) return err('被授權者和授權者都要填');
   if (ee === U || or === U) return err('請填實際的公司名稱');
-  if (ee === ctx.ee && or === ctx.or) return err('和目前這一組一樣');
+  const agSel = document.getElementById('mv_ag').value, agNew = document.getElementById('mv_ag2').value.trim(), ag = agNew || agSel;
+  const setAg = () => { if (ag === '__keep') return; if (ag) { agents[pkey(ee, or)] = ag; if (!lists.ag.includes(ag)) lists.ag.push(ag); } else delete agents[pkey(ee, or)]; };
+  if (ee === ctx.ee && or === ctx.or) {
+    if (ag === '__keep') return err('和目前這一組一樣。如果只是要改版代，請在上方「版代」選好再按移動');
+    setAg(); saveCtx(); closeMv(); render(); return toast(ag ? '已把「' + ee + ' × ' + or + '」的版代設為 ' + ag : '已取消這一組的版代');
+  }
   const key = b => b.isbn || ('t:' + b.title);
   const have = new Set(books.filter(b => eeOf(b) === ee && orOf(b) === or).map(key));
   const ids = new Set(mvIds.map(String));
@@ -535,7 +546,7 @@ function doMv() {
   });
   if (!lists.ee.includes(ee)) lists.ee.push(ee);
   if (!lists.or.includes(or)) lists.or.push(or);
-  ctx.ee = ee; ctx.or = or;
+  ctx.ee = ee; ctx.or = or; setAg();
   save(); saveCtx(); closeMv(); render();
   toast('已移動 ' + moved + ' 本到 ' + ee + ' × ' + or + (dup ? '；' + dup + ' 本目標已有，已合併' : ''));
 }
@@ -831,6 +842,19 @@ function renderOv() {
 }
 function copyText(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('已複製'), () => prompt('請手動複製', t)); }
 function copyGroup(i) { copyText(ovTexts[i]); }
+function openAg() {
+  const prev = ovMode; ovMode = 'rc'; renderOv(); ovMode = prev;
+  const L = ovKeys.map((k, i) => ({ k, i })).filter(x => x.k.mode === 'rc' && x.k.key.startsWith('日方版代 '));
+  if (!L.length) return toast('目前沒有走版代的書。請先在主畫面設定「版代」，並確認被授權者不是「未指定」');
+  document.getElementById('ag').innerHTML = ovlHead('📤 給日方版代', 'closeAg') +
+    '<div class="stat">每位版代一份，旁邊授權者的書合併在一起，同一本書多家評估併成一列。</div>' +
+    L.map(x => {
+      const bks = books.filter(b => !b.cand && eeOf(b) !== U && recOf(b) === x.k.key), ls = [...new Set(bks.map(orOf))];
+      return '<div class="pk" style="align-items:center"><span style="flex:1"><b>' + esc(x.k.key.replace('日方版代 ', '')) + '</b><br><span class="s">' + ls.length + ' 家授權者：' + esc(ls.join('、')) + '<br>共 ' + new Set(bks.map(b => orOf(b) + '|' + (b.isbn || b.title))).size + ' 本</span></span><button class="g cp" onclick="copyGroup(' + x.i + ')">複製文字</button><button class="cp" onclick="csvGroup(' + x.i + ')">附件 CSV</button></div>';
+    }).join('');
+  document.getElementById('ag').style.display = 'block';
+}
+function closeAg() { document.getElementById('ag').style.display = 'none'; }
 function csvGroup(i) {
   const g = ovKeys[i];
   if (g.mode === 'rc') csvMerged(books.filter(b => !b.cand && eeOf(b) !== U && recOf(b) === g.key), '評估申請_給' + g.key, false);
