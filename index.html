@@ -40,6 +40,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 #ov .r{padding:7px 0;border-bottom:1px solid #e5e7eb;font-size:.85rem;line-height:1.5}#ov .tg{font-size:.72rem;background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:6px}
 #td .r{padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:.88rem;line-height:1.5}#td .tg{font-size:.72rem;padding:1px 6px;border-radius:6px}#td .cp{flex:0 0 auto;padding:6px 14px;font-size:.8rem}
 #nm .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
+#isbnErr{display:none}#isbnErr.on{display:block;margin:-4px 0 10px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:6px;font-size:.88rem;line-height:1.45}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:9px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:30}
 @media print{.np{display:none!important}body{background:#fff;padding:0}.wrap{padding:0}.card input{border:0;padding:2px}}
 </style>
@@ -60,9 +61,10 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <video id="vid" playsinline muted autoplay style="display:none;width:100%;border-radius:8px;margin-bottom:10px;background:#000"></video>
   <div id="scanInfo" class="stat"></div>
   <div class="add">
-    <input id="isbnIn" type="text" inputmode="numeric" placeholder="手動輸入 ISBN（數字鍵盤）">
+    <input id="isbnIn" oninput="clrErr()" type="text" inputmode="numeric" placeholder="手動輸入 ISBN，或貼上 Amazon 網址">
     <button onclick="manualAdd()">加入</button>
   </div>
+  <div id="isbnErr"></div>
   <div class="row">
     <button class="g" onclick="openFm()">✏️ 手寫新增</button>
     <button class="g" onclick="openPk()">📥 從授權者已有的書挑選</button>
@@ -261,11 +263,40 @@ function lastMsg(b) {
   el.style.display = 'block';
 }
 
+function check10(s) {
+  if (!/^\d{9}[\dX]$/.test(s)) return false;
+  let sum = 0;
+  for (let i = 0; i < 10; i++) sum += (s[i] === 'X' ? 10 : +s[i]) * (10 - i);
+  return sum % 11 === 0;
+}
+function urlToIsbn(raw) {
+  const m = String(raw).match(/https?:\/\/[^\s)\]>"']+/i);
+  if (!m) return { v: raw };
+  const u = m[0];
+  if (/^https?:\/\/(amzn\.(asia|to|eu)|a\.co)\//i.test(u)) return { err: '這是 Amazon 短網址，看不出書號。請在瀏覽器打開，貼上網址列的完整網址' };
+  const dp = u.match(/\/(?:dp|gp\/product|product|ASIN)\/([0-9A-Z]{10})(?=[\/?#&]|$)/i);
+  if (dp) {
+    const a = dp[1].toUpperCase();
+    if (/^B0/.test(a)) return { err: '這是 B0 開頭的商品代碼（Kindle 電子書或非書籍），不是 ISBN。電子書請用「手寫新增」' };
+    if (check10(a)) return { v: a };
+    return { err: '網址裡的書號 ' + a + ' 不是有效的 ISBN，可能不是書籍' };
+  }
+  const q = u.match(/[?&]isbn=([0-9Xx-]{10,17})/i);
+  if (q) return { v: q[1] };
+  const g = (u.match(/97[89]\d{10}/g) || []).find(check13);
+  if (g) return { v: g };
+  return { err: '這個網址裡找不到 ISBN' };
+}
+function clrErr() { const e = document.getElementById('isbnErr'); e.textContent = ''; e.className = ''; }
+function fail(m) { toast(m); const e = document.getElementById('isbnErr'); e.textContent = '⚠ ' + m; e.className = 'on'; return false; }
 function addIsbn(raw) {
-  if (ctx.or === U) { toast('請先選擇授權者（被授權者可以先不選）'); return false; }
-  const isbn = normIsbn(raw);
-  if (!check13(isbn)) { toast(/^\d+$/.test(isbn) && isbn.length !== 13 ? 'ISBN 需要 13 碼，你輸入了 ' + isbn.length + ' 碼' : 'ISBN 檢查碼不符，請再核對一次'); return false; }
-  if (books.some(b => b.isbn === isbn && inCtx(b))) { toast('已在清單中'); return false; }
+  clrErr();
+  if (ctx.or === U) return fail('請先選擇授權者（被授權者可以先不選）');
+  const ur = urlToIsbn(raw);
+  if (ur.err) return fail(ur.err);
+  const isbn = normIsbn(ur.v);
+  if (!check13(isbn)) return fail(/^\d+$/.test(isbn) && isbn.length !== 13 ? 'ISBN 需要 13 碼，你輸入了 ' + isbn.length + ' 碼' : 'ISBN 檢查碼不符，請再核對一次');
+  if (books.some(b => b.isbn === isbn && inCtx(b))) return fail('這本已經在「' + ctx.ee + ' × ' + ctx.or + '」的清單中');
   const hasData = x => x.title || x.author || x.publisher;
   const src = books.find(x => x.isbn === isbn && orOf(x) === ctx.or && hasData(x)) || books.find(x => x.isbn === isbn && hasData(x));
   const b = { id: Date.now() + Math.random(), isbn, title: '', publisher: '', author: '', illus: '', date: '', note: '', st: 'pending', ts: Date.now(), lee: ctx.ee, lor: ctx.or, got: false };
@@ -280,6 +311,7 @@ function addIsbn(raw) {
 }
 function manualAdd() {
   const i = document.getElementById('isbnIn');
+  if (!i.value.trim()) return fail('請先輸入 ISBN，或貼上書籍網址');
   if (addIsbn(i.value)) i.value = '';
 }
 document.getElementById('isbnIn').addEventListener('keydown', e => { if (e.key === 'Enter') manualAdd(); });
