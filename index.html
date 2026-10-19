@@ -42,6 +42,8 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 #nm .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
 #isbnErr{display:none}#isbnErr.on{display:block;margin:-4px 0 10px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:6px;font-size:.88rem;line-height:1.45}
 #ag .cp{flex:0 0 auto;padding:6px 12px;font-size:.8rem}
+#im .r{padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:.88rem;line-height:1.5}
+#cl .cp{flex:0 0 auto;padding:6px 14px;font-size:.8rem}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111;color:#fff;padding:9px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:30}
 @media print{.np{display:none!important}body{background:#fff;padding:0}.wrap{padding:0}.card input{border:0;padding:2px}}
 </style>
@@ -55,7 +57,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
   <div class="shelf"><label>版代</label><select id="agSel" onchange="setAgent(this.value)"></select><button class="g" onclick="newAgent()">＋新增</button></div>
   <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openNm()">✎ 修改或刪除名稱（被授權者／授權者／版代）</button>
   <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="openMvAll()">↪ 把目前這一組的書全部移到別組</button>
-  <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="if (ctx.or === U) toast('請先選擇授權者'); else document.getElementById('impList').click()">📄 匯入授權者提供的書單（Excel／CSV）</button>
+  <button class="g" style="width:100%;padding:8px;font-size:.85rem;margin:-4px 0 10px" onclick="document.getElementById('impList').click()">📄 匯入書單（Excel／CSV；多個分頁＝多家授權者）</button>
   <input type="file" id="impList" accept=".xlsx,.xls,.csv" style="display:none" onchange="readList(event)">
   <button id="camBtn" class="ok" style="width:100%;margin-bottom:10px" onclick="toggleCam()">📷 開始連續掃描</button>
   <div id="reader"></div>
@@ -89,6 +91,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(event)">
   </div>
   <div class="row">
+    <button class="g" onclick="openCl()">🧹 清除匯入的書單（可指定）</button>
     <button class="red" onclick="clearBooks()">🗑 清空書單（保留公司名單與版代設定）</button>
   </div>
   </details>
@@ -105,6 +108,7 @@ body{padding-bottom:110px}.lb{font-size:.75rem;color:#6b7280;margin:3px 0 2px}in
 <div id="mv" class="ovl"></div>
 <div id="im" class="ovl"></div>
 <div id="ag" class="ovl"></div>
+<div id="cl" class="ovl"></div>
 <div id="toast"></div>
 <div id="last"></div>
 
@@ -573,7 +577,6 @@ function loadXlsx() {
 async function readList(ev) {
   const f = ev.target.files[0]; ev.target.value = '';
   if (!f) return;
-  if (ctx.or === U) return toast('請先選擇授權者');
   try {
     toast('讀取中…');
     await loadXlsx();
@@ -583,19 +586,23 @@ async function readList(ev) {
       let t; try { t = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { t = new TextDecoder('shift_jis').decode(buf); }
       wb = XLSX.read(t, { type: 'string' });
     } else wb = XLSX.read(buf, { type: 'array' });
-    impSt = { wb, name: f.name, sheet: 0, rows: [[]], hi: 0, map: {} };
+    impSt = { wb, name: f.name, sheet: 0, rows: [[]], hi: 0, map: {}, mode: wb.SheetNames.length > 1 ? 'all' : 'one' };
+    if (impSt.mode === 'all') return openImAll();
     const first = wb.SheetNames.findIndex(n => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '' }).filter(x => x.some(c => String(c).trim())).length >= 2);
     loadSheet(first < 0 ? 0 : first);
   } catch (e) { toast('無法讀取這個檔案（第一次需要網路載入讀取程式）'); }
 }
-function loadSheet(i) {
+function sheetRows(i) {
   const ws = impSt.wb.Sheets[impSt.wb.SheetNames[i]];
   (ws['!merges'] || []).forEach(mg => {
     const v = ws[XLSX.utils.encode_cell(mg.s)]; if (!v) return;
     for (let R = mg.s.r; R <= mg.e.r; R++) for (let C = mg.s.c; C <= mg.e.c; C++) { const a = XLSX.utils.encode_cell({ r: R, c: C }); if (!ws[a] || ws[a].v === '' || ws[a].v == null) ws[a] = Object.assign({}, v); }
   });
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }).filter(r => r.some(c => String(c).trim()));
-  impSt.sheet = i;
+  return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }).filter(r => r.some(c => String(c).trim()));
+}
+function loadSheet(i) {
+  const rows = sheetRows(i);
+  impSt.sheet = i; impSt.mode = 'one';
   if (rows.length < 2) { impSt.rows = [[]]; impSt.hi = 0; impSt.map = {}; toast('這個分頁沒有資料'); }
   else { const d = detect(rows); impSt.rows = rows; impSt.hi = d.hi; impSt.map = d.map; }
   openIm();
@@ -603,15 +610,15 @@ function loadSheet(i) {
 const imCell = (r, c) => c >= 0 && r[c] != null ? String(r[c]).trim() : '';
 const fmtSerial = n => { const d = new Date(Math.round((n - 25569) * 864e5)); return d.getUTCFullYear() + '/' + (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
 function imMap() { const m = {}; FIELDS.forEach(([f]) => { m[f] = +document.getElementById('im_' + f).value; }); return m; }
-function imBuild(m) {
+function imBuildFrom(rows, hi, m, or, forEe) {
   const key = b => b.isbn || ('t:' + b.title);
-  const have = new Set(books.filter(b => orOf(b) === ctx.or).map(key));
+  const have = new Set(books.filter(b => b.cand && orOf(b) === or && (b.candFor || '') === forEe).map(key));
   const list = []; let skip = 0; const t = Date.now();
-  impSt.rows.slice(impSt.hi + 1).forEach((r, i) => {
+  rows.slice(hi + 1).forEach((r, i) => {
     const raw = imCell(r, m.isbn), isbn = raw ? normIsbn(raw) : '', dv = m.date >= 0 ? r[m.date] : '';
     let title = imCell(r, m.title);
     [m.sub, m.sub2].forEach(c => { const sb = imCell(r, c); if (sb) title += (/^\d+$/.test(sb) ? ' ' : '　') + sb; });
-    const b = { id: t + i + Math.random(), isbn: check13(isbn) ? isbn : '', title, author: imCell(r, m.author), illus: imCell(r, m.illus), publisher: imCell(r, m.publisher), date: typeof dv === 'number' && dv > 20000 ? fmtSerial(dv) : imCell(r, m.date), note: '', type: '', st: 'ok', ts: t + i, lee: U, lor: ctx.or, got: false, cand: true, dbg: '來自匯入書單「' + impSt.name + '」' };
+    const b = { id: t + i + Math.random(), isbn: check13(isbn) ? isbn : '', title, author: imCell(r, m.author), illus: imCell(r, m.illus), publisher: imCell(r, m.publisher), date: typeof dv === 'number' && dv > 20000 ? fmtSerial(dv) : imCell(r, m.date), note: '', type: '', st: 'ok', ts: t + i, lee: U, lor: or, got: false, cand: true, candFor: forEe, dbg: '來自匯入書單「' + impSt.name + '」' };
     if (!b.title && !b.isbn) return;
     fixCreators(b);
     const k = key(b);
@@ -620,30 +627,75 @@ function imBuild(m) {
   });
   return { list, skip };
 }
+const imFor = () => { const e = document.getElementById('im_for'); return e ? e.value.trim() : ''; };
+function imBuild(m) { return imBuildFrom(impSt.rows, impSt.hi, m, ctx.or, imFor()); }
 function imPrev() {
   const m = imMap(), r = imBuild(m);
   document.getElementById('im_prev').innerHTML = '預計新增 <b>' + r.list.length + '</b> 本' + (r.skip ? '，略過 <b>' + r.skip + '</b> 本（書名或 ISBN 重複）' : '') + '<br>預覽前 3 本：<br>' +
     r.list.slice(0, 3).map(b => esc([b.title, b.author, b.publisher, b.isbn].filter(Boolean).join('／'))).join('<br>');
 }
+const forBox = () => '<label>這份書單是哪一家被授權者準備的？（選填）</label><input id="im_for" list="dl_imfor" value="' + esc(ctx.ee !== U ? ctx.ee : '') + '" placeholder="例如：圓神；留空＝所有被授權者都可挑選"><datalist id="dl_imfor">' + allNames('ee').map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>';
 function openIm() {
   const { rows, hi, map, wb } = impSt, head = rows[hi] || [];
   const opts = f => '<option value="-1">（不匯入）</option>' + head.map((h, i) => '<option value="' + i + '"' + (map[f] === i ? ' selected' : '') + '>第 ' + (i + 1) + ' 欄：' + esc(String(h).slice(0, 14)) + '</option>').join('');
   const multi = wb.SheetNames.length > 1;
-  const sheets = multi ? '<label>分頁</label><select onchange="loadSheet(+this.value)">' + wb.SheetNames.map((n, i) => '<option value="' + i + '"' + (i === impSt.sheet ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select>' : '';
+  const sheets = multi ? '<button class="g" style="width:100%;margin-bottom:8px" onclick="openImAll()">改成：全部分頁一次匯入（分頁名稱＝授權者）</button><label>分頁</label><select onchange="loadSheet(+this.value)">' + wb.SheetNames.map((n, i) => '<option value="' + i + '"' + (i === impSt.sheet ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select>' : '';
   document.getElementById('im').innerHTML = ovlHead('📄 匯入「' + esc(ctx.or) + '」的書單', 'closeIm') +
-    '<div class="stat">檔案：' + esc(impSt.name) + '｜此分頁共 ' + Math.max(0, rows.length - hi - 1) + ' 列。' + (multi ? '一次匯入一個分頁，匯完可以切換分頁再匯入。' : '') + '請確認每個欄位對到哪一欄。匯入的書放在這家授權者的「可挑選書單」，不會列入寄出清單。</div><div class="fm">' +
-    sheets + FIELDS.map(([f, lab]) => '<label>' + lab + '</label><select id="im_' + f + '" onchange="imPrev()">' + opts(f) + '</select>').join('') +
+    '<div class="stat">檔案：' + esc(impSt.name) + '｜此分頁共 ' + Math.max(0, rows.length - hi - 1) + ' 列。這個模式只匯入一個分頁，書會歸在上方目前選的授權者（' + esc(ctx.or) + '）。請確認每個欄位對到哪一欄。</div><div class="fm">' +
+    sheets + forBox() + FIELDS.map(([f, lab]) => '<label>' + lab + '</label><select id="im_' + f + '" onchange="imPrev()">' + opts(f) + '</select>').join('') +
     '<div class="stat" id="im_prev"></div><button style="width:100%;margin-top:12px" onclick="doIm()">匯入</button></div>';
   document.getElementById('im').style.display = 'block'; imPrev();
 }
 function closeIm() { document.getElementById('im').style.display = 'none'; }
 function doIm() {
+  if (ctx.or === U) return toast('這個模式要先在主畫面選好授權者。多個分頁的檔案，可改用「全部分頁一次匯入」');
   const m = imMap();
   if (m.title < 0 && m.isbn < 0) return toast('至少要指定「書名」或「ISBN」欄');
   const { list, skip } = imBuild(m);
-  books.push(...list); save(); render();
+  books.push(...list);
+  const fe = imFor(); if (fe && !lists.ee.includes(fe)) lists.ee.push(fe);
+  save(); saveCtx(); render();
   toast('已匯入 ' + list.length + ' 本' + (skip ? '，' + skip + ' 本重複而略過' : ''));
   if (impSt.wb.SheetNames.length > 1) imPrev(); else closeIm();
+}
+const SHORT = { title: '書名', sub: '集數', sub2: '副題', author: '著者', illus: '繪者', publisher: '出版社', date: '出版日', isbn: 'ISBN' };
+function openImAll() {
+  impSt.mode = 'all';
+  impSt.sheets = impSt.wb.SheetNames.map((n, i) => {
+    const rows = sheetRows(i);
+    if (rows.length < 2) return { n, rows, hi: 0, map: {}, ok: false, cnt: 0 };
+    const d = detect(rows);
+    return { n, rows, hi: d.hi, map: d.map, ok: d.map.title >= 0 || d.map.isbn >= 0, cnt: rows.length - d.hi - 1 };
+  });
+  document.getElementById('im').innerHTML = ovlHead('📄 匯入書單：' + impSt.sheets.length + ' 個分頁', 'closeIm') +
+    '<div class="stat">檔案：' + esc(impSt.name) + '。每個分頁當作一家授權者，分頁名稱就是授權者名稱，可以直接修改。取消勾選的分頁不會匯入。匯入的書放在「可挑選書單」，不會列入寄出清單。</div><div class="fm">' + forBox() + '</div>' +
+    impSt.sheets.map((x, k) => '<div class="r"><label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" class="im_ck" data-k="' + k + '"' + (x.ok ? ' checked' : '') + ' style="width:auto"> <b>' + esc(x.n) + '</b></label>' +
+      '<input class="im_nm" data-k="' + k + '" value="' + esc(x.n.trim()) + '" placeholder="授權者名稱" style="margin:4px 0">' +
+      '<div class="s">' + (x.ok ? x.cnt + ' 列｜欄位：' + Object.keys(SHORT).map(f => SHORT[f] + (x.map[f] >= 0 ? '✓' : '✗')).join(' ') : '<span style="color:#b45309">⚠ 找不到書名或 ISBN 欄（或沒有資料），預設不匯入。要匯入請改用「只匯入一個分頁」手動對應。</span>') + '</div></div>').join('') +
+    '<button class="g" style="width:100%;margin-top:10px" onclick="loadSheet(Math.max(0, impSt.sheets.findIndex(x => x.ok)))">改成：只匯入一個分頁</button>' +
+    '<button style="width:100%;margin-top:10px" onclick="doImAll()">匯入勾選的分頁</button>';
+  document.getElementById('im').style.display = 'block';
+}
+function doImAll() {
+  const fe = imFor(), res = [];
+  document.querySelectorAll('.im_ck').forEach(ck => {
+    if (!ck.checked) return;
+    const x = impSt.sheets[+ck.dataset.k], or = document.querySelector('.im_nm[data-k="' + ck.dataset.k + '"]').value.trim();
+    if (!or || or === U) return res.push({ n: x.n, err: '沒有填授權者名稱' });
+    if (!x.ok) return res.push({ n: x.n, or, err: '找不到書名或 ISBN 欄' });
+    const m = {}; FIELDS.forEach(([f]) => { m[f] = x.map[f] != null ? x.map[f] : -1; });
+    const r = imBuildFrom(x.rows, x.hi, m, or, fe);
+    books.push(...r.list);
+    if (!lists.or.includes(or)) lists.or.push(or);
+    res.push({ n: x.n, or, add: r.list.length, skip: r.skip });
+  });
+  if (fe && !lists.ee.includes(fe)) lists.ee.push(fe);
+  save(); saveCtx(); render();
+  const total = res.reduce((t, r) => t + (r.add || 0), 0);
+  document.getElementById('im').innerHTML = ovlHead('📄 匯入完成：共 ' + total + ' 本', 'closeIm') +
+    '<div class="stat">' + (fe ? '這些書列為「' + esc(fe) + '」準備的書單。' : '') + '開會時，在主畫面選好被授權者和授權者，按「📥 從授權者已有的書挑選」，勾選要評估的書。</div>' +
+    res.map(r => '<div class="r"><b>' + esc(r.or || r.n) + '</b>　' + (r.err ? '<span style="color:#b91c1c">未匯入：' + esc(r.err) + '</span>' : '新增 ' + r.add + ' 本' + (r.skip ? '，略過 ' + r.skip + ' 本重複' : '')) + '</div>').join('') +
+    '<button style="width:100%;margin-top:12px" onclick="closeIm()">完成</button>';
 }
 function okPub(id) { const b = books.find(x => x.id === id); if (b) { b.pubOk = true; b.guess = false; save(); render(); } }
 function upd(id, f, v) {
@@ -881,18 +933,24 @@ function saveFm() {
 function openPk() {
   if (ctx.ee === U || ctx.or === U) return toast('請先選擇被授權者與授權者');
   const key = b => b.isbn || ('t:' + b.title);
+  const oe = document.getElementById('pk_other'), showOther = !!(oe && oe.checked);
   const have = new Set(books.filter(inCtx).map(key)), seen = new Set(), L = [];
+  const mine = x => x.cand && orOf(x) === ctx.or && (!x.candFor || x.candFor === ctx.ee);
+  const prepared = new Set(books.filter(mine).map(key));
   const ord = byTime(books);
-  [...ord.filter(b => !b.cand), ...ord.filter(b => b.cand)].forEach(b => { const k = key(b); if (orOf(b) === ctx.or && !inCtx(b) && !have.has(k) && !seen.has(k)) { seen.add(k); L.push(b); } });
+  [...ord.filter(b => !b.cand), ...ord.filter(b => b.cand && (showOther || mine(b)))].forEach(b => { const k = key(b); if (orOf(b) === ctx.or && !inCtx(b) && !have.has(k) && !seen.has(k)) { seen.add(k); L.push(b); } });
+  L.sort((a, b) => (prepared.has(key(b)) ? 1 : 0) - (prepared.has(key(a)) ? 1 : 0));
   const nc = books.filter(b => b.cand && orOf(b) === ctx.or).length;
+  const nOther = books.filter(b => b.cand && orOf(b) === ctx.or && b.candFor && b.candFor !== ctx.ee).length;
   const who = b => [...new Set(books.filter(x => key(x) === key(b) && orOf(x) === ctx.or && !x.cand).map(x => eeOf(x) === U ? '尚未分配' : eeOf(x)))];
   document.getElementById('pk').innerHTML = ovlHead('📥 從「' + esc(ctx.or) + '」已有的書挑選', 'closePk') +
-    '<div class="stat">勾選後按「加入選取的書」，會加進「' + esc(ctx.ee) + '」。搜尋時，先勾的書不會被取消。</div>' +
+    '<div class="stat">勾選後按「加入選取的書」，會加進「' + esc(ctx.ee) + '」。標「📋 ' + esc(ctx.ee) + ' 準備」的是出發前匯入的書單，排在最前面。搜尋時，先勾的書不會被取消。</div>' +
     '<input id="pk_q" placeholder="🔍 搜尋書名、著者、出版社、ISBN" oninput="filterPk()" style="margin-bottom:6px">' +
+    (nOther ? '<label style="display:flex;gap:6px;align-items:center;font-size:.8rem;color:#555;margin:2px 0 6px"><input type="checkbox" id="pk_other" style="width:auto"' + (showOther ? ' checked' : '') + ' onchange="openPk()"> 也顯示其他被授權者準備的書（' + nOther + ' 本）</label>' : '') +
     (L.length ? '<div style="display:flex;gap:8px;margin:6px 0"><button class="g" style="flex:1" onclick="selVisible()">☑ 選取目前顯示的</button><button style="flex:1" onclick="addPk()">加入選取的書</button></div>' : '') +
-    (L.length ? L.map(b => { const w = who(b); return '<label class="pk" data-t="' + esc([b.title, b.author, b.illus, b.publisher, b.isbn].join(' ').toLowerCase()) + '"><input type="checkbox" value="' + b.id + '"><span><b>' + esc(b.title || '（缺書名）') + '</b><br><span class="s">' + esc([b.author, b.publisher].filter(Boolean).join('／')) + '　' + esc(b.isbn || '') + '<br>' + (w.length ? '已選：' + esc(w.join('、')) : '授權者書單，尚無人選') + '</span></span></label>'; }).join('')
+    (L.length ? L.map(b => { const w = who(b), pr = prepared.has(key(b)); return '<label class="pk" data-t="' + esc([b.title, b.author, b.illus, b.publisher, b.isbn].join(' ').toLowerCase()) + '"><input type="checkbox" value="' + b.id + '"><span><b>' + esc(b.title || '（缺書名）') + '</b>' + (pr ? ' <span class="tg" style="background:#eef2ff;color:#3730a3;font-size:.72rem;padding:1px 6px;border-radius:6px">📋 ' + esc(ctx.ee) + ' 準備</span>' : '') + '<br><span class="s">' + esc([b.author, b.publisher].filter(Boolean).join('／')) + '　' + esc(b.isbn || '') + '<br>' + (w.length ? '已選：' + esc(w.join('、')) : '尚無人選') + '</span></span></label>'; }).join('')
       : '<div class="stat">這家授權者目前沒有可挑的書</div>') +
-    (nc ? '<button class="red" style="width:100%;margin-top:14px" onclick="clearCand()">清除這家授權者的匯入書單（' + nc + ' 本）</button>' : '');
+    (nc ? '<button class="g" style="width:100%;margin-top:14px" onclick="openCl()">管理或清除匯入的書單…</button>' : '');
   document.getElementById('pk').style.display = 'block';
 }
 function filterPk() {
@@ -900,6 +958,35 @@ function filterPk() {
   document.querySelectorAll('#pk .pk').forEach(el => { el.style.display = (!q || (el.dataset.t || '').includes(q)) ? '' : 'none'; });
 }
 function selVisible() { document.querySelectorAll('#pk .pk').forEach(el => { if (el.style.display !== 'none') el.querySelector('input').checked = true; }); }
+function candGroups() {
+  const m = {};
+  books.filter(b => b.cand).forEach(b => { const k = orOf(b) + '||' + (b.candFor || ''); if (!m[k]) m[k] = { or: orOf(b), ee: b.candFor || '', n: 0 }; m[k].n++; });
+  return Object.values(m).sort((a, c) => a.or.localeCompare(c.or) || a.ee.localeCompare(c.ee));
+}
+function openCl() {
+  const G = candGroups();
+  if (!G.length) return toast('目前沒有匯入的書單');
+  const byOr = {}, byEe = {};
+  G.forEach(g => { byOr[g.or] = (byOr[g.or] || 0) + g.n; byEe[g.ee] = (byEe[g.ee] || 0) + g.n; });
+  const row = (label, n, kind, a, b) => '<div class="pk" style="align-items:center"><span style="flex:1"><b>' + esc(label) + '</b><br><span class="s">' + n + ' 本</span></span><button class="red cp" data-k="' + kind + '" data-a="' + encodeURIComponent(a) + '" data-b="' + encodeURIComponent(b) + '" onclick="doCl(this)">清除</button></div>';
+  const hd = t => '<h3 style="margin:14px 0 4px;font-size:1rem;background:#eef2ff;padding:6px 8px;border-radius:6px">' + t + '</h3>';
+  document.getElementById('cl').innerHTML = ovlHead('🧹 清除匯入的書單', 'closeCl') +
+    '<div class="stat">只會清掉「出發前匯入、還沒被勾選加入」的候選書。已經勾選加進被授權者清單的書，和掃描、手寫的書，都不會被動到。</div>' +
+    hd('依授權者（對應 Excel 的一個分頁）') + Object.keys(byOr).sort().map(o => row(o, byOr[o], 'or', o, '')).join('') +
+    hd('依被授權者（他準備的所有書單）') + Object.keys(byEe).sort().map(e => row(e || '（沒填準備者，所有被授權者都看得到）', byEe[e], 'ee', e, '')).join('') +
+    hd('只清其中一份（授權者 × 準備者）') + G.map(g => row(g.or + '　←　' + (g.ee || '（沒填準備者）'), g.n, 'pair', g.or, g.ee)).join('');
+  document.getElementById('cl').style.display = 'block';
+}
+function closeCl() { document.getElementById('cl').style.display = 'none'; }
+function doCl(el) {
+  const k = el.dataset.k, a = decodeURIComponent(el.dataset.a), b = decodeURIComponent(el.dataset.b);
+  const hit = x => x.cand && (k === 'or' ? orOf(x) === a : k === 'ee' ? (x.candFor || '') === a : orOf(x) === a && (x.candFor || '') === b);
+  const n = books.filter(hit).length;
+  const what = k === 'or' ? '授權者「' + a + '」匯入的全部書單' : k === 'ee' ? (a ? '被授權者「' + a + '」準備的全部書單' : '沒填準備者的書單') : '「' + a + '」底下' + (b ? '「' + b + '」準備' : '沒填準備者') + '的書單';
+  if (!confirm('清除' + what + '（' + n + ' 本）？\n已經勾選加入清單的書不受影響。')) return;
+  books = books.filter(x => !hit(x)); save(); render(); toast('已清除 ' + n + ' 本');
+  if (candGroups().length) openCl(); else closeCl();
+}
 function clearCand() {
   const n = books.filter(b => b.cand && orOf(b) === ctx.or).length;
   if (!confirm('清除「' + ctx.or + '」匯入的書單 ' + n + ' 本？\n已經加進被授權者清單的書不受影響。')) return;
@@ -911,7 +998,7 @@ function addPk() {
   let n = 0;
   ids.forEach(id => {
     const s = books.find(x => String(x.id) === id); if (!s) return;
-    const b = Object.assign({}, s, { id: Date.now() + Math.random(), lee: ctx.ee, lor: ctx.or, got: false, cand: false, note: '', ts: Date.now() + n, dbg: s.cand ? '由授權者書單帶入' : '由「' + eeOf(s) + '」的清單帶入' });
+    const b = Object.assign({}, s, { id: Date.now() + Math.random(), lee: ctx.ee, lor: ctx.or, got: false, cand: false, candFor: '', note: '', ts: Date.now() + n, dbg: s.cand ? '由授權者書單帶入' : '由「' + eeOf(s) + '」的清單帶入' });
     books.unshift(b); n++;
     if (!b.title && b.isbn) { b.st = 'pending'; lookup(b); }
   });
